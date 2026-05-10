@@ -38,7 +38,8 @@ def batch_process(args: argparse.Namespace) -> None:
     checkpoint_every = args.checkpoint_every
     resume = args.resume
     force_start = args.force_start
-    
+    adaptive = not args.no_adaptive  # flag is --no-adaptive, default True
+
     stats = process_batch(
         input_file,
         output_file,
@@ -46,7 +47,8 @@ def batch_process(args: argparse.Namespace) -> None:
         checkpoint_every=checkpoint_every,
         resume=resume,
         force_start=force_start,
-        use_stealth=use_stealth
+        use_stealth=use_stealth,
+        adaptive=adaptive
     )
     sys.exit(0 if stats else 1)
 
@@ -89,6 +91,8 @@ Examples:
     batch_parser.add_argument("--checkpoint-every", type=int, default=25, help="Save checkpoint every N rows")
     batch_parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     batch_parser.add_argument("--force-start", type=int, help="Force start from row N (0-based)")
+    batch_parser.add_argument("--no-adaptive", action="store_true",
+                              help="Disable adaptive rate limiting (use fixed delay)")
     batch_parser.set_defaults(func=batch_process)
 
     # Parse arguments

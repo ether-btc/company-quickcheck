@@ -101,20 +101,37 @@ def address_confidence(row_addr: str, row_plz: str, row_city: str,
     return score
 
 
-def search_opendata(name: str, limit: int = 5) -> Optional[Dict]:
-    """Search opendata.host for companies."""
+def search_opendata(name: str, limit: int = 5,
+                    rate_limiter=None) -> Optional[Dict]:
+    """Search opendata.host for companies.
+
+    Args:
+        name: Company name to search.
+        limit: Max results to return (default 5).
+        rate_limiter: Optional AdaptiveRateLimiter instance. If provided,
+                      wait() is called before the request and the response
+                      is recorded afterward for adaptive delay adjustment.
+    """
     try:
         logger.info(f"Searching opendata for: {name}")
+
+        # Adaptive wait before request
+        if rate_limiter is not None:
+            rate_limiter.wait()
+
         resp = requests.get(
             f"{BASE_URL}/registered-companies/find",
             params={"company-name": name, "limit": limit},
             auth=(API_KEY, ""),
             timeout=20,
         )
+
+        # Record response for adaptive rate limiting
+        if rate_limiter is not None:
+            rate_limiter.record_response(resp.status_code, dict(resp.headers))
+
         if resp.status_code == 429:
-            wait = int(resp.headers.get("Retry-After", 60))
-            logger.warning(f"Rate limited. Waiting {wait}s")
-            time.sleep(wait)
+            logger.warning("Rate limited (429) — backing off via rate limiter")
             return None
         if resp.status_code == 401:
             logger.error("Invalid API key (401 Unauthorized)")
@@ -151,12 +168,21 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
         return None
 
 
-def search_company(name: str, limit: int = 5, use_stealth: bool = False) -> Optional[Dict]:
-    """Search for companies using opendata.host or stealth-core."""
+def search_company(name: str, limit: int = 5, use_stealth: bool = False,
+                   rate_limiter=None) -> Optional[Dict]:
+    """Search for companies using opendata.host or stealth-core.
+
+    Args:
+        name: Company name to search.
+        limit: Max results to return (default 5).
+        use_stealth: Route through stealth-core subprocess (default False).
+        rate_limiter: Optional AdaptiveRateLimiter for adaptive delay.
+                      Only used for direct opendata requests (not stealth-core).
+    """
     if use_stealth:
         return search_stealth_core(name, limit)
     else:
-        return search_opendata(name, limit)
+        return search_opendata(name, limit, rate_limiter=rate_limiter)
 
 
 def is_deleted(company: Dict) -> bool:

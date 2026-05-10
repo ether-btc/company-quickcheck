@@ -64,6 +64,23 @@ class Config:
         # For now, return from config, fallback to default
         return self.data.get("api", {}).get("base_url", "https://api.opendata.host/1.0")
 
+    def build_rate_limiter(self) -> 'AdaptiveRateLimiter':
+        """Build an AdaptiveRateLimiter from config values.
+
+        Reads rate_limit.delay as initial_delay and
+        adaptive_rate_limit.* keys for fine-tuning.
+        Falls back gracefully if adaptive keys are absent (uses safe defaults).
+        """
+        from .rate_limiter import AdaptiveRateLimiter  # local import to avoid circular
+        rl_cfg = self.data.get("adaptive_rate_limit", {})
+        return AdaptiveRateLimiter(
+            initial_delay=self.data.get("rate_limit", {}).get("delay", 1.1),
+            min_delay=rl_cfg.get("min_delay", 0.3),
+            max_delay=rl_cfg.get("max_delay", 10.0),
+            backoff_multiplier=rl_cfg.get("backoff_multiplier", 1.5),
+            success_divisor=rl_cfg.get("success_divisor", 1.5),
+        )
+
 
 # Global config instance (can be used across the application)
 config = Config()

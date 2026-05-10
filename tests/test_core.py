@@ -93,7 +93,7 @@ class TestProcessBatch(unittest.TestCase):
         call2 = Mock(return_value=self.success_response)
         call3 = Mock(return_value=self.not_found_response)
         
-        def side_effect(name, limit, use_stealth):
+        def side_effect(name, limit, use_stealth, rate_limiter=None):
             if "Wienerberger" in name:
                 return call1()
             elif "Erste" in name:
@@ -126,7 +126,7 @@ class TestProcessBatch(unittest.TestCase):
         call1 = Mock(return_value=self.success_response)
         call2 = Mock(return_value=self.deleted_response)
         
-        def side_effect(name, limit, use_stealth):
+        def side_effect(name, limit, use_stealth, rate_limiter=None):
             if "Wienerberger" in name:
                 return call1()
             else:

@@ -12,6 +12,7 @@ import pandas as pd
 
 from .config import config
 from .api import address_confidence, format_company, is_deleted, search_company
+from .rate_limiter import AdaptiveRateLimiter
 
 # Configure logging
 logging.basicConfig(
@@ -23,12 +24,15 @@ logger = logging.getLogger(__name__)
 
 def process_batch(input_file: str, output_file: str, limit: int = None,
                   checkpoint_every: int = 25, resume: bool = False,
-                  force_start: int = None, use_stealth: bool = False) -> dict:
+                  force_start: int = None, use_stealth: bool = False,
+                  adaptive: bool = True) -> dict:
     """
     Process companies with address-aware matching and Firmenbuchnr backfill.
 
     force_start: skip all rows before this index (0-based). Useful for
                  resuming after a partial test run with known bad output.
+    adaptive:    use AdaptiveRateLimiter instead of fixed delay (default True).
+                 Set False to preserve the old fixed-sleep behaviour.
     """
     # Validate input file exists
     input_path = Path(input_file)
@@ -67,6 +71,13 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
 
     stats = {"checked": 0, "deleted": 0, "active": 0, "not_found": 0, "errors": 0, "fb_backfilled": 0}
 
+    # Adaptive rate limiter — replaces fixed sleep
+    rate_limiter = config.build_rate_limiter() if adaptive else None
+    if rate_limiter:
+        logger.info(f"[rate] adaptive mode | initial={rate_limiter.current_delay:.2f}s")
+    else:
+        logger.info(f"[rate] fixed delay={config.get_rate_limit_delay():.2f}s")
+
     for idx, row in df.iterrows():
         if idx < start_idx:
             continue
@@ -78,7 +89,8 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
             stats["errors"] += 1
             continue
 
-        result = search_company(firmenname, limit=5, use_stealth=use_stealth)
+        result = search_company(firmenname, limit=5, use_stealth=use_stealth,
+                                rate_limiter=rate_limiter)
         if result is None:
             df.at[idx, "GELÖSCHT"] = -1
             logger.error(f"  [{idx}] {firmenname}: ERROR (no response)")
@@ -145,7 +157,11 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
             logger.warning(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
             stats["not_found"] += 1
 
-        time.sleep(config.get_rate_limit_delay())
+        # Sleep: adaptive rate limiter handles it (wait + record), fixed fallback otherwise
+        if rate_limiter:
+            pass  # wait + record already done inside search_company
+        else:
+            time.sleep(config.get_rate_limit_delay())
 
         # Checkpoint every N rows — write checkpoint BEFORE Excel save (race condition fix)
         if (idx + 1) % checkpoint_every == 0:

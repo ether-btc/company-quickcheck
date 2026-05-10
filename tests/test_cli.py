@@ -86,7 +86,8 @@ class TestCLI(unittest.TestCase):
             stealth=False,
             checkpoint_every=25,
             resume=False,
-            force_start=None
+            force_start=None,
+            no_adaptive=False
         ))
 
         self.assertIsNone(result)
