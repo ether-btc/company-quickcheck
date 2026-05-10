@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 import pandas as pd
@@ -34,8 +35,13 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
-    # Load data
-    df = pd.read_excel(input_file) if not input_file.endswith(".csv") else pd.read_csv(input_file)
+    # Load data with timeout (90s)
+    if not input_file.endswith(".csv"):
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(pd.read_excel, input_file)
+            df = future.result(timeout=90)
+    else:
+        df = pd.read_csv(input_file)
 
     if limit:
         df = df.head(limit).copy()
@@ -141,15 +147,22 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
 
         time.sleep(config.get_rate_limit_delay())
 
-        # Checkpoint every N rows — persist immediately on error too
+        # Checkpoint every N rows — write checkpoint BEFORE Excel save (race condition fix)
         if (idx + 1) % checkpoint_every == 0:
+            # Write checkpoint first (so crash after Excel save still allows correct resume)
+            try:
+                with open(output_file + ".checkpoint.json", "w") as f:
+                    json.dump({"last_idx": idx, **stats}, f)
+            except OSError as e:
+                logger.error(f"  [checkpoint] Failed to write checkpoint: {e}")
+            # Then save Excel (no timeout here — final save is more important)
             df.to_excel(output_file, index=False)
-            with open(output_file + ".checkpoint.json", "w") as f:
-                json.dump({"last_idx": idx, **stats}, f)
             logger.info(f"  [checkpoint {idx+1}/{total}]")
 
-    # Final save
-    df.to_excel(output_file, index=False)
+    # Final save (with timeout)
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(df.to_excel, output_file, index=False)
+        future.result(timeout=60)
     if os.path.exists(output_file + ".checkpoint.json"):
         os.remove(output_file + ".checkpoint.json")
 
