@@ -123,35 +123,35 @@ class TestSearchOpendata(unittest.TestCase):
                 }
             ]
         }
-        
+
         mock_get.return_value = mock_response
-        
+
         result = search_opendata("Wienerberger AG")
         self.assertIsNotNone(result)
         self.assertEqual(result["size"], 1)
         self.assertTrue(result.get("companies"))
-    
+
     @patch("requests.get")
     def test_429_rate_limit(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 429
         mock_response.headers = {"Retry-After": "5"}
         mock_get.return_value = mock_response
-        
+
         result = search_opendata("Test AG")
         self.assertIsNone(result)
-    
+
     @patch("requests.get")
     def test_401_invalid_key(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 401
         mock_response.headers = {}
         mock_get.return_value = mock_response
-        
+
         # The function should print an error and return None
         result = search_opendata("Test AG")
         self.assertIsNone(result)
-    
+
     @patch("requests.get")
     def test_exception(self, mock_get):
         mock_get.side_effect = Exception("Network error")
@@ -160,34 +160,40 @@ class TestSearchOpendata(unittest.TestCase):
 
 
 class TestStealthCoreSearch(unittest.TestCase):
-    @patch("subprocess.run")
-    def test_success(self, mock_run):
+    @patch("company_quickcheck.api.shutil.which")
+    @patch("company_quickcheck.api.subprocess.run")
+    def test_success(self, mock_run, mock_which):
+        mock_which.return_value = True  # stealth-core found in PATH
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = "{\"size\": 1, \"companies\": [{\"business-name\": \"Test AG\"}]}"
         mock_run.return_value = mock_result
-        
+
         result = search_stealth_core("Test AG")
         self.assertIsNotNone(result)
         self.assertEqual(result["size"], 1)
-    
-    @patch("subprocess.run")
-    def test_nonzero_exit(self, mock_run):
+
+    @patch("company_quickcheck.api.shutil.which")
+    @patch("company_quickcheck.api.subprocess.run")
+    def test_nonzero_exit(self, mock_run, mock_which):
+        mock_which.return_value = True  # stealth-core found in PATH
         mock_result = Mock()
         mock_result.returncode = 1
         mock_result.stderr = "Error"
         mock_run.return_value = mock_result
-        
+
         result = search_stealth_core("Test AG")
         self.assertIsNone(result)
-    
-    @patch("subprocess.run")
-    def test_json_decode_error(self, mock_run):
+
+    @patch("company_quickcheck.api.shutil.which")
+    @patch("company_quickcheck.api.subprocess.run")
+    def test_json_decode_error(self, mock_run, mock_which):
+        mock_which.return_value = True  # stealth-core found in PATH
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = "invalid json"
         mock_run.return_value = mock_result
-        
+
         result = search_stealth_core("Test AG")
         self.assertIsNone(result)
 
@@ -196,11 +202,11 @@ class TestIsDeleted(unittest.TestCase):
     def test_deleted(self):
         company = {"reg-status": "cancelled"}
         self.assertTrue(is_deleted(company))
-    
+
     def test_active(self):
         company = {"reg-status": "registered"}
         self.assertFalse(is_deleted(company))
-    
+
     def test_other(self):
         company = {"reg-status": "unknown"}
         self.assertFalse(is_deleted(company))
@@ -215,7 +221,7 @@ class TestFormatCompany(unittest.TestCase):
         }
         result = format_company(company)
         self.assertEqual(result, "Wienerberger AG [77676f / registered]")
-    
+
     def test_missing_fields(self):
         company = {}
         result = format_company(company)

@@ -64,12 +64,6 @@ class Config:
         # For now, return from config, fallback to default
         return self.data.get("api", {}).get("base_url", "https://api.opendata.host/1.0")
 
-    def get_rate_limit_delay(self) -> float:
-        """Get rate limit delay in seconds."""
-        enabled = self.data.get("rate_limit", {}).get("enabled", True)
-        delay = self.data.get("rate_limit", {}).get("delay", 1.1)
-        return delay if enabled else 0
-
 
 # Global config instance (can be used across the application)
 config = Config()

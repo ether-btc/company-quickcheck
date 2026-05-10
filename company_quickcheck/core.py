@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 """Batch processing logic for company status checks."""
 
-import pandas as pd
-import time
 import json
-import os
 import logging
+import os
+import time
+from pathlib import Path
+
+import pandas as pd
+
 from .config import config
-from .api import search_company, is_deleted, format_company, address_confidence
+from .api import address_confidence, format_company, is_deleted, search_company
 
 # Configure logging
 logging.basicConfig(
@@ -27,10 +29,13 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     force_start: skip all rows before this index (0-based). Useful for
                  resuming after a partial test run with known bad output.
     """
+    # Validate input file exists
+    input_path = Path(input_file)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
 
     # Load data
     df = pd.read_excel(input_file) if not input_file.endswith(".csv") else pd.read_csv(input_file)
-    original_idx = df.index.tolist()  # preserve original Excel row numbers
 
     if limit:
         df = df.head(limit).copy()
@@ -49,10 +54,10 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
         with open(output_file + ".checkpoint.json") as f:
             ck = json.load(f)
             start_idx = ck.get("last_idx", 0) + 1
-            print(f"[RESUME] Starting from row {start_idx}")
+            logger.info(f"[RESUME] Starting from row {start_idx}")
     elif force_start is not None:
         start_idx = force_start
-        print(f"[FORCE START] Starting from row {start_idx}")
+        logger.info(f"[FORCE START] Starting from row {start_idx}")
 
     stats = {"checked": 0, "deleted": 0, "active": 0, "not_found": 0, "errors": 0, "fb_backfilled": 0}
 
@@ -63,14 +68,14 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
         firmenname = str(row.get("Firmenname", "")).strip()
         if not firmenname or firmenname == "nan":
             df.at[idx, "GELÖSCHT"] = -1
-            print(f"  [{idx}] Missing company name")
+            logger.warning(f"  [{idx}] Missing company name")
             stats["errors"] += 1
             continue
 
         result = search_company(firmenname, limit=5, use_stealth=use_stealth)
         if result is None:
             df.at[idx, "GELÖSCHT"] = -1
-            print(f"  [{idx}] {firmenname}: ERROR (no response)")
+            logger.error(f"  [{idx}] {firmenname}: ERROR (no response)")
             stats["errors"] += 1
         # opendata.host returns {"companies": [...]} — no errorCode field
         elif result.get("companies"):
@@ -109,29 +114,29 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
                     if fb_api and confidence >= 0.8:
                         df.at[idx, "Firmenbuchnr"] = fb_api
                         stats["fb_backfilled"] += 1
-                        print(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
+                        logger.info(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
                 else:
                     matched = company
-                    print(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
+                    logger.warning(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
             elif not matched:
                 matched = companies[0]
-                print(f"  [{idx}] {firmenname}: {n_results} results, no FB match → using first: {format_company(matched)}")
+                logger.info(f"  [{idx}] {firmenname}: {n_results} results, no FB match → using first: {format_company(matched)}")
 
             # Determine GELÖSCHT status
             if is_deleted(matched):
                 df.at[idx, "GELÖSCHT"] = 1
-                print(f"  [{idx}] GELÖSCHT | {format_company(matched)}")
+                logger.info(f"  [{idx}] GELÖSCHT | {format_company(matched)}")
                 stats["deleted"] += 1
             else:
                 df.at[idx, "GELÖSCHT"] = 0
                 if n_results > 1 or not matched:
-                    print(f"  [{idx}] aktiv | {format_company(matched)}")
+                    logger.info(f"  [{idx}] aktiv | {format_company(matched)}")
                 stats["active"] += 1
             stats["checked"] += 1
 
         else:
             df.at[idx, "GELÖSCHT"] = -1
-            print(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
+            logger.warning(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
             stats["not_found"] += 1
 
         time.sleep(config.get_rate_limit_delay())
@@ -141,19 +146,19 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
             df.to_excel(output_file, index=False)
             with open(output_file + ".checkpoint.json", "w") as f:
                 json.dump({"last_idx": idx, **stats}, f)
-            print(f"  [checkpoint {idx+1}/{total}]")
+            logger.info(f"  [checkpoint {idx+1}/{total}]")
 
     # Final save
     df.to_excel(output_file, index=False)
     if os.path.exists(output_file + ".checkpoint.json"):
         os.remove(output_file + ".checkpoint.json")
 
-    print(f"\n=== DONE ===")
-    print(f"Checked:    {stats['checked']}")
-    print(f"Active:     {stats['active']}")
-    print(f"Deleted:    {stats['deleted']}")
-    print(f"Not found:  {stats['not_found']}")
-    print(f"Errors:     {stats['errors']}")
-    print(f"FB backfill:{stats['fb_backfilled']}")
-    print(f"Output: {output_file}")
+    logger.info(f"=== DONE ===")
+    logger.info(f"Checked:    {stats['checked']}")
+    logger.info(f"Active:     {stats['active']}")
+    logger.info(f"Deleted:    {stats['deleted']}")
+    logger.info(f"Not found:  {stats['not_found']}")
+    logger.info(f"Errors:     {stats['errors']}")
+    logger.info(f"FB backfill:{stats['fb_backfilled']}")
+    logger.info(f"Output: {output_file}")
     return stats

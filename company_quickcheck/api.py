@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """API interactions for opendata.host and stealth-core."""
 
-import os
-import time
-import json
-import re
-import requests
 import logging
+import os
+import re
+import shutil
+import subprocess
+import time
+import urllib.parse
 from typing import Dict, List, Any, Optional
+
+import requests
+from requests.exceptions import RequestException
+
 from .config import config
 
 # Configure logging
@@ -31,7 +36,7 @@ def normalize_address(addr: str, country: str = "AT") -> str:
     if not addr:
         return ""
     addr = addr.lower()
-    
+
     # Apply country-specific normalization
     if country == "AT" or country == "DE":  # German-speaking countries
         # Umlauts
@@ -41,7 +46,7 @@ def normalize_address(addr: str, country: str = "AT") -> str:
         addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
         addr = re.sub(r"gasse(?=\b)", "gasse", addr)
     # Add more country-specific rules as needed
-    
+
     # Remove punctuation, extra spaces (common to all countries)
     addr = re.sub(r"[^\w\s]", "", addr)
     addr = re.sub(r"\s+", " ", addr).strip()
@@ -125,10 +130,16 @@ def search_opendata(name: str, limit: int = 5) -> Optional[Dict]:
 
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     """Search using stealth-core as subprocess."""
-    import subprocess
     import json
 
-    cmd = ["stealth-core", "fetch", f"registered-companies/find?company-name={name}&limit={limit}"]
+    # Check if stealth-core is available in PATH
+    if not shutil.which("stealth-core"):
+        logger.error("stealth-core binary not found in PATH")
+        return None
+
+    # URL-encode the name parameter to prevent injection
+    encoded_name = urllib.parse.quote(name, safe='')
+    cmd = ["stealth-core", "fetch", f"registered-companies/find?company-name={encoded_name}&limit={limit}"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
