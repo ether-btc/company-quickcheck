@@ -27,16 +27,12 @@ class Config:
     def _validate(self):
         """Validate configuration."""
         # Ensure required keys exist or set defaults
-        if "api" not in self.data:
-            self.data["api"] = {}
-        if "rate_limit" not in self.data:
-            self.data["rate_limit"] = {}
-        
-        # Set defaults
         self.data.setdefault("api", {})["base_url"] = self.data.get("api", {}).get("base_url", "https://api.opendata.host/1.0")
         self.data.setdefault("api", {})["api_key"] = self.data.get("api", {}).get("api_key")
         self.data.setdefault("rate_limit", {})["enabled"] = self.data.get("rate_limit", {}).get("enabled", True)
         self.data.setdefault("rate_limit", {})["delay"] = self.data.get("rate_limit", {}).get("delay", 1.1)
+        # Country configuration
+        self.data.setdefault("country", "AT")  # Default to Austria
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value."""
@@ -52,6 +48,21 @@ class Config:
         if not key:
             key = os.getenv("OPENDATA_API_KEY")
         return key
+
+    def get_rate_limit_delay(self) -> float:
+        """Get rate limit delay in seconds."""
+        enabled = self.data.get("rate_limit", {}).get("enabled", True)
+        delay = self.data.get("rate_limit", {}).get("delay", 1.1)
+        return delay if enabled else 0
+
+    def get_country(self) -> str:
+        """Get country code (e.g., 'AT', 'DE')."""
+        return self.data.get("country", "AT")
+
+    def get_base_url(self) -> str:
+        """Get base URL for the country."""
+        # For now, return from config, fallback to default
+        return self.data.get("api", {}).get("base_url", "https://api.opendata.host/1.0")
 
     def get_rate_limit_delay(self) -> float:
         """Get rate limit delay in seconds."""

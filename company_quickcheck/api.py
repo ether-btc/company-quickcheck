@@ -8,6 +8,7 @@ import re
 import requests
 import logging
 from typing import Dict, List, Any, Optional
+from .config import config
 
 # Configure logging
 logging.basicConfig(
@@ -16,27 +17,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-API_KEY = os.getenv("OPENDATA_API_KEY", "").strip()
+# Use config for base URL and API key
+BASE_URL = config.get_base_url()
+API_KEY = config.get_api_key()
 if not API_KEY:
-    raise ValueError("OPENDATA_API_KEY not set. Add to ~/.hermes/.env or export before running.")
+    raise ValueError("OPENDATA_API_KEY not set. Add to ~/.hermes/config.yaml or export before running.")
 
 
-BASE_URL = "https://api.opendata.host/1.0"
-
-
-def normalize_address(addr: str) -> str:
-    """Remove umlauts, punctuation, common abbreviations for fuzzy matching."""
+def normalize_address(addr: str, country: str = "AT") -> str:
+    """Remove umlauts, punctuation, common abbreviations for fuzzy matching.
+    Country parameter determines which normalization rules to apply.
+    """
     if not addr:
         return ""
     addr = addr.lower()
-    # Umlauts
-    addr = addr.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
-    # Common abbreviations
-    # Match "str." or "str" at the end of a word (before a word boundary)
-    addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
-    addr = re.sub(r"gasse(?=\b)", "gasse", addr)
-    # Remove punctuation, extra spaces
+    
+    # Apply country-specific normalization
+    if country == "AT" or country == "DE":  # German-speaking countries
+        # Umlauts
+        addr = addr.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
+        # Common abbreviations
+        # Match "str." or "str" at the end of a word (before a word boundary)
+        addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
+        addr = re.sub(r"gasse(?=\b)", "gasse", addr)
+    # Add more country-specific rules as needed
+    
+    # Remove punctuation, extra spaces (common to all countries)
     addr = re.sub(r"[^\w\s]", "", addr)
     addr = re.sub(r"\s+", " ", addr).strip()
     return addr
@@ -91,7 +97,7 @@ def address_confidence(row_addr: str, row_plz: str, row_city: str,
 
 
 def search_opendata(name: str, limit: int = 5) -> Optional[Dict]:
-    """Search opendata.host for Austrian companies."""
+    """Search opendata.host for companies."""
     try:
         logger.info(f"Searching opendata for: {name}")
         resp = requests.get(

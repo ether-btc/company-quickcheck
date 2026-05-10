@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
 """Batch processing logic for company status checks."""
-
 
 import pandas as pd
 import time
 import json
 import os
 import logging
+from .config import config
 from .api import search_company, is_deleted, format_company, address_confidence
 
 # Configure logging
@@ -133,7 +134,7 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
             print(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
             stats["not_found"] += 1
 
-        time.sleep(1.1)
+        time.sleep(config.get_rate_limit_delay())
 
         # Checkpoint every N rows — persist immediately on error too
         if (idx + 1) % checkpoint_every == 0:
