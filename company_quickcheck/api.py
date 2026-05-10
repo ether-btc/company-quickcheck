@@ -173,7 +173,7 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
 
     cmd = [
         "stealth-core",
-        "--config", stealth_config,
+        "-c", stealth_config,
         "fetch",
         full_url,
         "--headers", headers_json

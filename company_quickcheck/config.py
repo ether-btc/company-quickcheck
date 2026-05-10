@@ -82,8 +82,8 @@ class Config:
         )
 
     def get_stealth_core_config_path(self) -> str:
-        default = Path(__file__).parent.parent / "config" / "config.yaml"
-        return self.data.get("stealth_core", {}).get("config_path", str(default))
+        default = "/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml"
+        return self.data.get("stealth_core", {}).get("config_path", default)
 
 # Global config instance (can be used across the application)
 config = Config()
