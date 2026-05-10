@@ -88,22 +88,22 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
             else:
                 logger.info(f"[rate] fixed delay={config.get_rate_limit_delay():.2f}s")
         
-            for idx, row in df.iterrows():
-                if idx < start_idx:
-                    continue
+for idx, row in df.iterrows():
+    if idx < start_idx:
+        continue
+
+    firmenname = str(row.get("Firmenname", "")).strip()
+    if not firmenname or firmenname == "nan":
+        df.at[idx, "GELÖSCHT"] = -1
+        logger.warning(f" [{idx}] Missing company name")
+        stats["errors"] += 1
+        continue
         
-                firmenname = str(row.get("Firmenname", "")).strip()
-                if not firmenname or firmenname == "nan":
-                    df.at[idx, "GELÖSCHT"] = -1
-                    logger.warning(f"  [{idx}] Missing company name")
-                    stats["errors"] += 1
-                    continue
-        
-                result = safe_search_company(firmenname, limit=5, use_stealth=use_stealth,
-                    rate_limiter=rate_limiter)
-                if result is None:
+    result = safe_search_company(firmenname, limit=5, use_stealth=use_stealth,
+                             rate_limiter=rate_limiter)
+    if result is None:
     df.at[idx, "GELÖSCHT"] = -1
-    logger.error(f"  [{idx}] {firmenname}: ERROR (no response)")
+    logger.error(f" [{idx}] {firmenname}: ERROR (no response)")
     stats["errors"] += 1
     # opendata.host returns {"companies": [...]} — no errorCode field
     elif result.get("companies"):

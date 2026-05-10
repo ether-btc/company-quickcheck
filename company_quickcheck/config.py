@@ -81,6 +81,9 @@ class Config:
             success_divisor=rl_cfg.get("success_divisor", 1.5),
         )
 
+    def get_stealth_core_config_path(self) -> str:
+        default = Path(__file__).parent.parent / "config" / "config.yaml"
+        return self.data.get("stealth_core", {}).get("config_path", str(default))
 
 # Global config instance (can be used across the application)
 config = Config()

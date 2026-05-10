@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
+import base64
 from typing import Dict, List, Any, Optional
 
 import requests
@@ -148,21 +149,61 @@ def search_opendata(name: str, limit: int = 5,
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     """Search using stealth-core as subprocess."""
     import json
+    import base64
 
     # Check if stealth-core is available in PATH
     if not shutil.which("stealth-core"):
         logger.error("stealth-core binary not found in PATH")
         return None
 
-    # URL-encode the name parameter to prevent injection
+    # Get stealth config path
+    stealth_config = config.get_stealth_core_config_path()
+    api_key = config.get_api_key()
+    if not api_key:
+        logger.error("API key not found for stealth-core integration")
+        return None
+
+    # URL-encode the name parameter
     encoded_name = urllib.parse.quote(name, safe='')
-    cmd = ["stealth-core", "fetch", f"registered-companies/find?company-name={encoded_name}&limit={limit}"]
+    full_url = f"{BASE_URL}/registered-companies/find?company-name={encoded_name}&limit={limit}"
+
+    # Create Authorization header
+    auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
+    headers_json = json.dumps({"Authorization": auth_header})
+
+    cmd = [
+        "stealth-core",
+        "--config", stealth_config,
+        "fetch",
+        full_url,
+        "--headers", headers_json
+    ]
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             logger.error(f"Stealth-core error: {result.stderr}")
             return None
-        return json.loads(result.stdout)
+
+        # Parse the stdout to extract JSON body
+        output_lines = result.stdout.splitlines()
+        json_start = None
+        for i, line in enumerate(output_lines):
+            stripped = line.strip()
+            if stripped.startswith('{') or stripped.startswith('['):
+                json_start = i
+                break
+
+        if json_start is None:
+            logger.error("No JSON body found in stealth-core output")
+            return None
+
+        json_str = '\n'.join(output_lines[json_start:])
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return None
     except Exception as e:
         logger.error(f"Stealth-core exception: {e}")
         return None

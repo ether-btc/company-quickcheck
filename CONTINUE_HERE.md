@@ -7,7 +7,7 @@ Connect `company-quickcheck` to `stealth-core` so opendata.host API calls use st
 **Option B (subprocess relay)** — company-quickcheck calls `stealth-core fetch <full-url>` with `--headers '{"Authorization":"Basic <api_key>"}'` and `--config <stealth-config-path>`. stealth-core adds its own stealth headers (UA, accept, etc.) to the request, making the API call look like a real browser.
 
 ## What's Done
-All analysis complete. No code changed yet. Key findings:
+Steps 1 and 2 completed: config.py and api.py updated. core.py changes in progress with syntax errors.
 
 ### stealth-core details
 - Binary: `/home/hermes-pi/.hermes/projects/stealth-core/target/release/stealth-core`
@@ -33,13 +33,13 @@ All analysis complete. No code changed yet. Key findings:
 ### Step 1 — config.py: add stealth_core config path helper
 ```python
 def get_stealth_core_config_path(self) -> str:
-    default = Path(__file__).parent.parent / "config" / "config.yaml"
-    return self.data.get("stealth_core", {}).get("config_path", str(default))
+ default = Path(__file__).parent.parent / "config" / "config.yaml"
+ return self.data.get("stealth_core", {}).get("config_path", str(default))
 ```
 Add to `~/.hermes/config.yaml`:
 ```yaml
 stealth_core:
-  config_path: "/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml"
+ config_path: "/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml"
 ```
 
 ### Step 2 — api.py: rewrite search_stealth_core()
@@ -47,19 +47,19 @@ Current (broken): builds `stealth-core fetch /registered-companies/find?...` wit
 Target: full URL + Authorization header + config path
 ```python
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
-    stealth_config = Config().get_stealth_core_config_path()
-    encoded_name = urllib.parse.quote(name, safe='')
-    api_key = Config().get_api_key()
-    auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
+ stealth_config = Config().get_stealth_core_config_path()
+ encoded_name = urllib.parse.quote(name, safe='')
+ api_key = Config().get_api_key()
+ auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
 
-    cmd = [
-        "stealth-core",
-        "--config", stealth_config,
-        "fetch",
-        f"{BASE_URL}/registered-companies/find?company-name={encoded_name}&limit={limit}",
-        "--headers", json.dumps({"Authorization": auth_header})
-    ]
-    # execute, parse JSON debug lines + HTTP body from stdout
+cmd = [
+ "stealth-core",
+ "--config", stealth_config,
+ "fetch",
+ f"{BASE_URL}/registered-companies/find?company-name={encoded_name}&limit={limit}",
+ "--headers", json.dumps({"Authorization": auth_header})
+]
+# execute, parse JSON debug lines + HTTP body from stdout
 ```
 
 ### Step 3 — Parse stealth-core stdout
@@ -81,7 +81,7 @@ python -m company_quickcheck check "Alcatel Austria AG" --stealth
 ## GitHub
 - Repo: `ether-btc/company-quickcheck`
 - Branch: master
-- All done — nothing uncommitted except this file
+- Uncommitted changes: config.py, api.py, core.py, CONTINUE_HERE.md
 
 ## Next Action
-Start with Step 1: read current `api.py` and `config.py` in full, then implement changes.
+Fix indentation errors in core.py's process_batch function.
