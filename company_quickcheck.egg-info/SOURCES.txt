@@ -5,6 +5,7 @@ company_quickcheck/__init__.py
 company_quickcheck/__main__.py
 company_quickcheck/api.py
 company_quickcheck/cli.py
+company_quickcheck/config.py
 company_quickcheck/core.py
 company_quickcheck.egg-info/PKG-INFO
 company_quickcheck.egg-info/SOURCES.txt
