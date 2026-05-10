@@ -1,3 +1,37 @@
+Metadata-Version: 2.4
+Name: company-quickcheck
+Version: 0.1.0
+Summary: Batch Austrian company status checker using opendata.host API
+Home-page: https://github.com/ether-btc/company-quickcheck
+Author: Hermes Agent
+Author-email: hermes-pi@raspberrypi.local
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Utilities
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: pandas>=1.5.0
+Requires-Dist: openpyxl>=3.0.0
+Requires-Dist: requests>=2.28.0
+Requires-Dist: pyyaml>=6.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # Company QuickCheck
 
 Batch Austrian company status checker using the opendata.host API.

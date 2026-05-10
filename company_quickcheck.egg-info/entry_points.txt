@@ -1,0 +1,2 @@
+[console_scripts]
+company-quickcheck = company_quickcheck.cli:main
