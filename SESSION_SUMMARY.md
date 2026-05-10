@@ -1,15 +1,16 @@
-# company-quickcheck Session Summary — 2026-05-10 (continued)
+# company-quickcheck Session Summary — 2026-05-10
 
-## Status: Audit Phase 2 Complete, Phase 3 Planned ✅
+## Status: All Phase 3 LOW priority fixes complete ✅
 
-**Commit:** 7a91fe9 (pushed to origin/master)
+**Commit:** `dcf9ab0` (pushed to origin/master)
 **Tests:** 31/31 passing
 **Branch:** master | **GitHub:** ether-btc/company-quickcheck
 
 ---
 
-## Completed Fixes (from audit — commit 7a91fe9)
+## All Fixes Applied (audit complete)
 
+### Commit `7a91fe9` — Audit fixes (Phase 2):
 | Priority | Issue | File | Fix |
 |----------|-------|------|-----|
 | 🔴 CRITICAL | URL injection in stealth-core | api.py | `urllib.parse.quote(name, safe='')` |
@@ -19,36 +20,34 @@
 | 🟡 MEDIUM | No input file validation | core.py | Added `Path.exists()` check |
 | 🟡 MEDIUM | stealth-core not in PATH | api.py | Added `shutil.which()` check |
 | 🟡 MEDIUM | Inconsistent logging (print vs logger) | core.py | All → logger calls |
-| 🟢 LOW | Test mocks for shutil.which | test_api.py | Added patch for `company_quickcheck.api.shutil.which` |
 
----
-
-## Planned: Phase 3 Fixes (LOW priority — not yet started)
-
-All four require changes to `core.py` — no new tests needed.
-
-| Priority | Issue | Risk | Fix |
+### Commit `dcf9ab0` — Phase 3 LOW priority fixes:
+| Priority | Issue | File | Fix |
 |----------|-------|------|-----|
-| 🟡 LOW | **Checkpoint race condition** (core.py:146-148) | Crash between Excel save and checkpoint write → rows re-processed | Write checkpoint BEFORE Excel save |
-| 🟡 LOW | **Checkpoint write no error handling** (core.py:147) | Disk full → checkpoint silently fails | Wrap in try/except, log on failure |
-| 🟡 LOW | **pandas Excel no timeout** (core.py:32, 152) | Large files could hang indefinitely | Add timeout to read_excel/to_excel |
-| 🟡 LOW | **API key in plaintext config.yaml** | Config file may have weak permissions | Document restricted permissions in README |
-
-### Fix Order Recommended
-1. Checkpoint race → fix order (checkpoint BEFORE Excel save)
-2. Checkpoint error handling → add try/except
-3. pandas timeout → add timeout to Excel operations
-4. Config permissions → document in README
+| 🟡 LOW | Checkpoint race condition | core.py | Write checkpoint BEFORE Excel save |
+| 🟡 LOW | Checkpoint write no error handling | core.py | Wrap in try/except (OSError logged) |
+| 🟡 LOW | pd.read_excel no timeout | core.py | 90s timeout via ThreadPoolExecutor |
+| 🟡 LOW | df.to_excel no timeout | core.py | 60s timeout via ThreadPoolExecutor |
 
 ---
 
-## Phase 3: Multi-country support (DE, CH, NL)
+## Remaining (DEFERRED — multi-country support frozen):
 
-**Not started.** Requires:
-- Country-specific BASE_URL per config (AT already works)
-- `config.get_base_url()` already supports per-country routing
-- Add DE/CH/NL company name normalization rules in `api.py`
-- Tests for each country's data format
+| Priority | Issue | Status |
+|----------|-------|--------|
+| — | Multi-country support (DE, CH, NL) | **FROZEN** — not in scope |
+| 🟡 LOW | API key in plaintext config.yaml | Document in README (deferred) |
+
+---
+
+## Git History
+
+```
+dcf9ab0 Fix checkpoint race, error handling, and Excel timeouts
+e680f02 docs: add SESSION_SUMMARY.md with Phase 3 fix plan
+7a91fe9 Audit fixes: URL encoding, duplicate methods, shebang, input validation
+bd47525 Implement configuration file support and logging...
+```
 
 ---
 
@@ -59,19 +58,15 @@ cd /home/hermes-pi/company-quickcheck
 source venv/bin/activate
 pytest tests/ -v  # verify 31/31 pass
 
-# Then fix Phase 3 LOW priority issues:
-# 1. core.py: swap checkpoint/Excel save order
-# 2. core.py: add error handling on checkpoint write
-# 3. core.py: add timeout to pandas operations
-# 4. README: document config file permissions
-
-# Or proceed to multi-country support (Phase 3)
+# All Phase 3 LOW fixes are complete
+# Multi-country support (DE, CH, NL) frozen — not in scope
+# README config permissions doc still pending (LOW)
 ```
 
 ---
 
-## GitHub Status
+## GitHub
 
-- Commit `7a91fe9` pushed ✅
+- Commits `dcf9ab0` pushed to `origin/master` ✅
 - No open issues or PRs
-- Working dir clean (nothing uncommitted)
+- Working dir clean
