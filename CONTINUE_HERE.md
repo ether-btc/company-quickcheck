@@ -1,49 +1,55 @@
-# company-quickcheck — Session Report
+# Company-Quickcheck — CONTINUE_HERE
+## Session: 2026-05-11 ~01:15 UTC
 
-## Batch Run Completed (May 11, 2026)
+## Running Process
+`proc_c02f766826ba` (PID 1058746)
+```bash
+cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && set -a && source /home/hermes-pi/.hermes/.env && set +a && python autonomous_batch.py
+```
 
-### Final Status
-- **Total companies**: 150
-- **Active (0)**: 65 ✅
-- **Deleted (1)**: 48 ❌
-- **Not found (-1)**: 37 ⚠️
+## Checkpoint at ~01:14 UTC
+```
+last_idx: 374, checked: 50, deleted: 29, active: 21, not_found: 22, errors: 0, skipped_429: 278
+Retry queue: ~300 firms in /srv/sync/retry_queue.json
+```
 
-### What was done
-1. Ran full batch on `companies_checked.xlsx` (150 Austrian companies)
-2. Re-checked 23 rows that got rate-limited (429) in the initial runs
-3. Fixed 23 rows with correct status (active/deleted)
-4. 37 companies still have `-1` status — they either:
-   - Are genuinely not found in the opendata registry
-   - Hit 429 rate limits repeatedly (16 companies got "Could not fetch data" errors)
+## Processing State
+- **Phase 1:** Running — opendata.host API, skips 429 immediately (no wait), queues for retry
+- **Phase 2:** VIES — pending (waits for Phase 1 completion)
+- **Phase 3:** Web scrape — pending
+- **Phase 4:** Merge to final — pending
 
-### Rate Limiting Observations
-- opendata.host is aggressive — ~30% of requests hit 429
-- Retry-After values up to 57s observed
-- The adaptive rate limiter correctly backs off but the API is still quite hostile
-- Companies that errored: Cigma, Compuware, MLINE, Novell, British Airways, Equant, GEFCO, Schenker, Saudi Arabian, Morawa, Anton Unterwurzacher + 6 others
+## Key Files
+| File | Purpose |
+|------|---------|
+| `/srv/sync/batch_input_1.xlsx` | 1,473 unchecked firms |
+| `/srv/sync/batch_output_1.xlsx` | Phase 1 partial output (374 rows processed) |
+| `/srv/sync/batch_output_1.xlsx.checkpoint.json` | Checkpoint state (auto-resume) |
+| `/srv/sync/retry_queue.json` | ~300 firms for VIES Phase 2 |
+| `/srv/sync/Unternehmen_merged.xlsx` | 1,711 rows (110 known + 1,473 unchecked) |
+| `/srv/sync/Unternehmen_sanitized.xlsx` | Source file, 1,711 rows |
+| `/srv/sync/Unternehmen_checked.xlsx` | Final output (created on merge) |
 
-### Remaining -1 Companies (37)
-These companies could not be definitively classified as active or deleted:
-- Alcatel-Lucent AG, Sagemcom Austria GmbH
-- InterXion Österreich GmbH, OnTec Software Solutions AG
-- Novell Österreich, British Airways Österreich
-- And 30 more (see `companies_checked.xlsx` rows with GELÖSCHT=-1)
+## 429 Rate: ~75-80%
+Very high. autonomous_batch.py handles by skipping immediately, collecting in retry_queue.
 
-### Git
-- Commit `1c7b69b` pushed: "data: update companies_checked.xlsx - 150 Austrian companies batch verified"
-- Data file tracked: `data/companies_checked.xlsx`
+## Resume Instructions
+1. Check if running: `ps aux | grep autonomous_batch | grep -v grep`
+2. If not running, restart (auto-resumes from checkpoint):
+   ```bash
+   cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && set -a && source /home/hermes-pi/.hermes/.env && set +a && python autonomous_batch.py
+   ```
+3. Check progress:
+   ```bash
+   cat /srv/sync/batch_output_1.xlsx.checkpoint.json
+   cat /srv/sync/retry_queue.json | python -c "import json,sys; print(len(json.load(sys.stdin)))"
+   ```
 
-### Skill: company-quickcheck
-Current capabilities:
-- `company-quickcheck check <name>` — single company lookup
-- `company-quickcheck batch <input.xlsx> <output.xlsx>` — batch processing
-- `company-quickcheck stats <file.xlsx>` — show statistics
-- Direct API mode works reliably (stealth-core integration still has issues)
-- Adaptive rate limiter with 429-aware backoff
-- Checkpoint/resume via `--force-start N`
+## Git Commits This Session
+- `53b05fd` — feat: add autonomous multi-layer batch processor with VIES/web fallback
 
-### Next Steps (for next session)
-1. Retry the 16 "Could not fetch" companies with longer delays (30-60s)
-2. Fix stealth-core JSON parsing (debug log lines mixed with HTTP body in stdout)
-3. Consider: are these 37 -1 companies genuinely delisted/non-existent in Austria?
-4. Could cross-reference with Firmenwortkürzel (company number) if available
+## Time Projection (from checkpoint)
+- Phase 1 remaining: ~1,099 rows @ ~40/min = ~27 min
+- Phase 2 (VIES): ~5 min
+- Phase 3 (Web): ~3 min
+- **Total: ~35 min from checkpoint** → done by ~01:50 UTC
