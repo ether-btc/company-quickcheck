@@ -86,7 +86,7 @@ class TestProcessBatch(unittest.TestCase):
             if os.path.exists(file_name):
                 os.remove(file_name)
     
-    @patch("company_quickcheck.api.search_company")
+    @patch("company_quickcheck.core.search_company")
     def test_process_batch_success(self, mock_search):
         # Mock first company as active, second as active, third as not found
         call1 = Mock(return_value=self.success_response)
@@ -120,7 +120,7 @@ class TestProcessBatch(unittest.TestCase):
         self.assertEqual(df_out.iloc[1]["GELÖSCHT"], 0)
         self.assertEqual(df_out.iloc[2]["GELÖSCHT"], -1)
     
-    @patch("company_quickcheck.api.search_company")
+    @patch("company_quickcheck.core.search_company")
     def test_process_batch_with_deleted(self, mock_search):
         # Mock first as active, second as deleted
         call1 = Mock(return_value=self.success_response)
@@ -141,7 +141,7 @@ class TestProcessBatch(unittest.TestCase):
         self.assertEqual(stats["deleted"], 1)
         self.assertEqual(stats["not_found"], 0)
     
-    @patch("company_quickcheck.api.search_company")
+    @patch("company_quickcheck.core.search_company")
     def test_process_batch_api_error(self, mock_search):
         mock_search.return_value = None
         
@@ -151,7 +151,7 @@ class TestProcessBatch(unittest.TestCase):
         self.assertEqual(stats["errors"], 2)
         self.assertEqual(stats["not_found"], 0)
     
-    @patch("company_quickcheck.api.search_company")
+    @patch("company_quickcheck.core.search_company")
     def test_process_batch_resume(self, mock_search):
         # Create a checkpoint file
         checkpoint_data = {

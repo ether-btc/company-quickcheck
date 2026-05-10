@@ -30,7 +30,7 @@ class TestNormalizeAddress(unittest.TestCase):
     def test_umlauts(self):
         self.assertEqual(normalize_address("straße"), "strasse")
         self.assertEqual(normalize_address("Müller"), "mueller")
-        self.assertEqual(normalize_address("Köln"), "koln")
+        self.assertEqual(normalize_address("Köln"), "koeln")
 
     def test_abbreviations(self):
         self.assertEqual(normalize_address("Hauptstr. 1"), "hauptstrasse 1")
@@ -91,8 +91,8 @@ class TestAddressConfidence(unittest.TestCase):
             "1100",
             "wien"
         )
-        # After normalization, both have "hauptstrasse", so exact match
-        self.assertEqual(confidence, 1.0)
+        # After normalization, street names match but numbers differ → 0.75
+        self.assertEqual(confidence, 0.75)
 
 
 class TestSearchOpendata(unittest.TestCase):
@@ -123,6 +123,7 @@ class TestSearchOpendata(unittest.TestCase):
                 }
             ]
         }
+        
         mock_get.return_value = mock_response
         
         result = search_opendata("Wienerberger AG")

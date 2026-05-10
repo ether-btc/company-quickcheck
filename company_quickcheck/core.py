@@ -6,7 +6,15 @@ import pandas as pd
 import time
 import json
 import os
+import logging
 from .api import search_company, is_deleted, format_company, address_confidence
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 def process_batch(input_file: str, output_file: str, limit: int = None,
@@ -54,6 +62,7 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
         firmenname = str(row.get("Firmenname", "")).strip()
         if not firmenname or firmenname == "nan":
             df.at[idx, "GELÖSCHT"] = -1
+            print(f"  [{idx}] Missing company name")
             stats["errors"] += 1
             continue
 

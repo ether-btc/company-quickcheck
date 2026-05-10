@@ -6,7 +6,15 @@ import time
 import json
 import re
 import requests
+import logging
 from typing import Dict, List, Any, Optional
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 API_KEY = os.getenv("OPENDATA_API_KEY", "").strip()
@@ -85,6 +93,7 @@ def address_confidence(row_addr: str, row_plz: str, row_city: str,
 def search_opendata(name: str, limit: int = 5) -> Optional[Dict]:
     """Search opendata.host for Austrian companies."""
     try:
+        logger.info(f"Searching opendata for: {name}")
         resp = requests.get(
             f"{BASE_URL}/registered-companies/find",
             params={"company-name": name, "limit": limit},
@@ -93,15 +102,18 @@ def search_opendata(name: str, limit: int = 5) -> Optional[Dict]:
         )
         if resp.status_code == 429:
             wait = int(resp.headers.get("Retry-After", 60))
-            print(f"    [429 rate limited] waiting {wait}s")
+            logger.warning(f"Rate limited. Waiting {wait}s")
             time.sleep(wait)
             return None
         if resp.status_code == 401:
+            logger.error("Invalid API key (401 Unauthorized)")
             raise PermissionError("Invalid API key (401 Unauthorized)")
         resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        logger.info(f"Opendata search successful: {len(result.get('companies', []))} results")
+        return result
     except Exception as e:
-        print(f"    [error] {e}")
+        logger.error(f"Error in opendata search: {e}")
         return None
 
 
@@ -114,11 +126,11 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
-            print(f"    [stealth-core error] {result.stderr}")
+            logger.error(f"Stealth-core error: {result.stderr}")
             return None
         return json.loads(result.stdout)
     except Exception as e:
-        print(f"    [stealth-core exception] {e}")
+        logger.error(f"Stealth-core exception: {e}")
         return None
 
 
