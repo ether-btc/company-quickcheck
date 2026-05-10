@@ -1,4 +1,5 @@
 README.md
+pyproject.toml
 setup.py
 company_quickcheck/__init__.py
 company_quickcheck/__main__.py
@@ -11,3 +12,6 @@ company_quickcheck.egg-info/dependency_links.txt
 company_quickcheck.egg-info/entry_points.txt
 company_quickcheck.egg-info/requires.txt
 company_quickcheck.egg-info/top_level.txt
+tests/test_api.py
+tests/test_cli.py
+tests/test_core.py

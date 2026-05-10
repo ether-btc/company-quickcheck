@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Command-line interface for company-quickcheck."""
 
-
 import argparse
 import sys
 from .core import process_batch
@@ -40,9 +39,15 @@ def batch_process(args: argparse.Namespace) -> None:
     resume = args.resume
     force_start = args.force_start
     
-    stats = process_batch(input_file, output_file, limit=limit,
-                          checkpoint_every=checkpoint_every, resume=resume,
-                          force_start=force_start, use_stealth=use_stealth)
+    stats = process_batch(
+        input_file,
+        output_file,
+        limit=limit,
+        checkpoint_every=checkpoint_every,
+        resume=resume,
+        force_start=force_start,
+        use_stealth=use_stealth
+    )
     sys.exit(0 if stats else 1)
 
 

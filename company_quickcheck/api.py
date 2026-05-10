@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """API interactions for opendata.host and stealth-core."""
 
-
 import os
 import time
 import json
@@ -26,11 +25,12 @@ def normalize_address(addr: str) -> str:
     # Umlauts
     addr = addr.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
     # Common abbreviations
-    addr = re.sub(r"\bstr\.?\b", "strasse", addr)
-    addr = re.sub(r"\bgasse\b", "gasse", addr)
+    # Match "str." or "str" at the end of a word (before a word boundary)
+    addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
+    addr = re.sub(r"gasse(?=\b)", "gasse", addr)
     # Remove punctuation, extra spaces
-    addr = re.sub(r"[^\\w\\s]", "", addr)
-    addr = re.sub(r"\\s+", " ", addr).strip()
+    addr = re.sub(r"[^\w\s]", "", addr)
+    addr = re.sub(r"\s+", " ", addr).strip()
     return addr
 
 
