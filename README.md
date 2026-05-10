@@ -79,6 +79,12 @@ Set `OPENDATA_API_KEY` in environment:
 export OPENDATA_API_KEY="your-api-key-here"
 ```
 
+If storing the key in `~/.hermes/config.yaml`, ensure the file has restricted permissions:
+
+```bash
+chmod 600 ~/.hermes/config.yaml
+```
+
 ## stealth-core Integration
 
 When `USE_STEALTH_CORE=1` is set, the tool uses `stealth-core` as an HTTP backend for fingerprint-aware, rate-limited requests. If `stealth-core` is unavailable, it falls back to direct requests.
