@@ -1,87 +1,49 @@
-# Stealth-Core Integration — CONTINUE_HERE
+# company-quickcheck — Session Report
 
-## What
-Connect `company-quickcheck` to `stealth-core` so opendata.host API calls use stealth headers (browser UA, TLS fingerprints, rate limiting) via subprocess relay.
+## Batch Run Completed (May 11, 2026)
 
-## Choice Made
-**Option B (subprocess relay)** — company-quickcheck calls `stealth-core fetch <full-url>` with `--headers '{"Authorization":"Basic <api_key>"}'` and `--config <stealth-config-path>`. stealth-core adds its own stealth headers (UA, accept, etc.) to the request, making the API call look like a real browser.
+### Final Status
+- **Total companies**: 150
+- **Active (0)**: 65 ✅
+- **Deleted (1)**: 48 ❌
+- **Not found (-1)**: 37 ⚠️
 
-## What's Done
-Steps 1 and 2 completed: config.py and api.py updated. core.py changes in progress with syntax errors.
+### What was done
+1. Ran full batch on `companies_checked.xlsx` (150 Austrian companies)
+2. Re-checked 23 rows that got rate-limited (429) in the initial runs
+3. Fixed 23 rows with correct status (active/deleted)
+4. 37 companies still have `-1` status — they either:
+   - Are genuinely not found in the opendata registry
+   - Hit 429 rate limits repeatedly (16 companies got "Could not fetch data" errors)
 
-### stealth-core details
-- Binary: `/home/hermes-pi/.hermes/projects/stealth-core/target/release/stealth-core`
-- Config: `/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml`
-- `stealth-core fetch` accepts `--config <path>` and `--headers <json>` flags
-- **reqwest APPENDS headers** (doesn't replace) — config headers + custom headers coexist
-- **No stealth-core code changes needed** — already works as designed
-- Output on stdout: JSON debug log lines + raw HTTP response (status + headers + body)
+### Rate Limiting Observations
+- opendata.host is aggressive — ~30% of requests hit 429
+- Retry-After values up to 57s observed
+- The adaptive rate limiter correctly backs off but the API is still quite hostile
+- Companies that errored: Cigma, Compuware, MLINE, Novell, British Airways, Equant, GEFCO, Schenker, Saudi Arabian, Morawa, Anton Unterwurzacher + 6 others
 
-### opendata.host auth
-- HTTP Basic Auth: `Authorization: Basic base64(api_key + ":")`
-- Base URL: `https://api.opendata.host/1.0`
-- Full endpoint: `https://api.opendata.host/1.0/registered-companies/find?company-name=<name>&limit=5`
+### Remaining -1 Companies (37)
+These companies could not be definitively classified as active or deleted:
+- Alcatel-Lucent AG, Sagemcom Austria GmbH
+- InterXion Österreich GmbH, OnTec Software Solutions AG
+- Novell Österreich, British Airways Österreich
+- And 30 more (see `companies_checked.xlsx` rows with GELÖSCHT=-1)
 
-### company-quickcheck files
-- `company_quickcheck/api.py` — `search_stealth_core()` at line ~148: **modify this**
-- `company_quickcheck/config.py` — add `get_stealth_core_config_path()` helper
-- `company_quickcheck/core.py` — `process_batch()` accepts `use_stealth` flag, passes to `search_company()`
-- `company_quickcheck/cli.py` — `--stealth` flag exists, no changes needed
+### Git
+- Commit `1c7b69b` pushed: "data: update companies_checked.xlsx - 150 Austrian companies batch verified"
+- Data file tracked: `data/companies_checked.xlsx`
 
-## Implementation Plan
+### Skill: company-quickcheck
+Current capabilities:
+- `company-quickcheck check <name>` — single company lookup
+- `company-quickcheck batch <input.xlsx> <output.xlsx>` — batch processing
+- `company-quickcheck stats <file.xlsx>` — show statistics
+- Direct API mode works reliably (stealth-core integration still has issues)
+- Adaptive rate limiter with 429-aware backoff
+- Checkpoint/resume via `--force-start N`
 
-### Step 1 — config.py: add stealth_core config path helper
-```python
-def get_stealth_core_config_path(self) -> str:
- default = Path(__file__).parent.parent / "config" / "config.yaml"
- return self.data.get("stealth_core", {}).get("config_path", str(default))
-```
-Add to `~/.hermes/config.yaml`:
-```yaml
-stealth_core:
- config_path: "/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml"
-```
-
-### Step 2 — api.py: rewrite search_stealth_core()
-Current (broken): builds `stealth-core fetch /registered-companies/find?...` with no headers/config
-Target: full URL + Authorization header + config path
-```python
-def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
- stealth_config = Config().get_stealth_core_config_path()
- encoded_name = urllib.parse.quote(name, safe='')
- api_key = Config().get_api_key()
- auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
-
-cmd = [
- "stealth-core",
- "--config", stealth_config,
- "fetch",
- f"{BASE_URL}/registered-companies/find?company-name={encoded_name}&limit={limit}",
- "--headers", json.dumps({"Authorization": auth_header})
-]
-# execute, parse JSON debug lines + HTTP body from stdout
-```
-
-### Step 3 — Parse stealth-core stdout
-stealth-core prints JSON log lines then raw HTTP response. Need to:
-- Skip lines until body starts (after blank line after headers)
-- Parse JSON body
-
-### Step 4 — Test
-```bash
-python -m company_quickcheck check "Alcatel Austria AG" --stealth
-```
-
-## Relevant Files
-- `/home/hermes-pi/company-quickcheck/company_quickcheck/api.py` — main change
-- `/home/hermes-pi/company-quickcheck/company_quickcheck/config.py` — add helper
-- `/home/hermes-pi/.hermes/projects/stealth-core/config/config.yaml` — stealth config
-- `/home/hermes-pi/company-quickcheck/.planning/stealth-core-integration-plan.md` — old plan (Option A, superseded)
-
-## GitHub
-- Repo: `ether-btc/company-quickcheck`
-- Branch: master
-- Uncommitted changes: config.py, api.py, core.py, CONTINUE_HERE.md
-
-## Next Action
-Fix indentation errors in core.py's process_batch function.
+### Next Steps (for next session)
+1. Retry the 16 "Could not fetch" companies with longer delays (30-60s)
+2. Fix stealth-core JSON parsing (debug log lines mixed with HTTP body in stdout)
+3. Consider: are these 37 -1 companies genuinely delisted/non-existent in Austria?
+4. Could cross-reference with Firmenwortkürzel (company number) if available
