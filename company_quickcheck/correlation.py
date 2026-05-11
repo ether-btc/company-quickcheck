@@ -79,9 +79,12 @@ DEFAULT_FIELD_WEIGHTS = {
 # ── Confidence Gate ────────────────────────────────────────────────────────────
 
 def passes_confidence_gate(confidence: Optional[float], min_confidence: float = 0.0) -> bool:
-    """Filter out NaN, zero, negative, and undefined confidence values."""
+    """Filter out NaN, zero, and negative confidence values.
+
+    None means no explicit confidence specified — passes through (no gate applied).
+    """
     if confidence is None:
-        return False
+        return True  # No explicit confidence = no gate (rule participates)
     if isinstance(confidence, float) and (confidence != confidence or confidence <= 0):
         return False  # NaN or <= 0
     return confidence >= min_confidence
@@ -497,9 +500,8 @@ class MatchResult:
 
     def __repr__(self) -> str:
         conf = f"{self.composite_confidence:.2f}" if self.composite_confidence else "N/A"
-        rule = f"rule={self.matched_rule_id}" if self.matched_rule_id else ""
-        return (f"<MatchResult fallback={self.fallback_reason} "
-                f"conf={conf} {rule} "
+        rule = f", rule={self.matched_rule_id}" if self.matched_rule_id else ""
+        return (f"<MatchResult fallback={self.fallback_reason} conf={conf}{rule} "
                 f"company={self.company.get('business-name') if self.company else None}>")
 
     def to_dict(self) -> Dict:
