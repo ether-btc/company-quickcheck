@@ -1,55 +1,37 @@
-# Company-Quickcheck — CONTINUE_HERE
-## Session: 2026-05-11 ~01:15 UTC
+# Company-Quickcheck — COMPLETED 2026-05-11 02:31 UTC
 
-## Running Process
-`proc_c02f766826ba` (PID 1058746)
-```bash
-cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && set -a && source /home/hermes-pi/.hermes/.env && set +a && python autonomous_batch.py
-```
+## Final Result: 1,711 Austrian Companies Verified
 
-## Checkpoint at ~01:14 UTC
-```
-last_idx: 374, checked: 50, deleted: 29, active: 21, not_found: 22, errors: 0, skipped_429: 278
-Retry queue: ~300 firms in /srv/sync/retry_queue.json
-```
+**Output:** `/srv/sync/Unternehmen_checked.xlsx`
 
-## Processing State
-- **Phase 1:** Running — opendata.host API, skips 429 immediately (no wait), queues for retry
-- **Phase 2:** VIES — pending (waits for Phase 1 completion)
-- **Phase 3:** Web scrape — pending
-- **Phase 4:** Merge to final — pending
+| GELÖSCHT | Count | Meaning |
+|-----------|-------|---------|
+| 0.0 | 1,474 | Active |
+| 1.0 | 236 | Deleted |
+| -1.0 | 1 | Unknown (WTE Wassertechnik GmbH — VIES invalid, web not found) |
 
-## Key Files
-| File | Purpose |
-|------|---------|
-| `/srv/sync/batch_input_1.xlsx` | 1,473 unchecked firms |
-| `/srv/sync/batch_output_1.xlsx` | Phase 1 partial output (374 rows processed) |
-| `/srv/sync/batch_output_1.xlsx.checkpoint.json` | Checkpoint state (auto-resume) |
-| `/srv/sync/retry_queue.json` | ~300 firms for VIES Phase 2 |
-| `/srv/sync/Unternehmen_merged.xlsx` | 1,711 rows (110 known + 1,473 unchecked) |
-| `/srv/sync/Unternehmen_sanitized.xlsx` | Source file, 1,711 rows |
-| `/srv/sync/Unternehmen_checked.xlsx` | Final output (created on merge) |
+**Processing Pipeline:**
+1. Phase 1: opendata.host API — fast pass, 429s skipped to retry queue
+2. Phase 2: VIES VAT validation for ~400 retry firms
+3. Phase 3: Web scrape (firmenbuch.at) for remaining -1
+4. Phase 4: Merge to final output
 
-## 429 Rate: ~75-80%
-Very high. autonomous_batch.py handles by skipping immediately, collecting in retry_queue.
+**429 Rate:** ~75% — handled by skip-immediately + retry queue strategy
 
-## Resume Instructions
-1. Check if running: `ps aux | grep autonomous_batch | grep -v grep`
-2. If not running, restart (auto-resumes from checkpoint):
-   ```bash
-   cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && set -a && source /home/hermes-pi/.hermes/.env && set +a && python autonomous_batch.py
-   ```
-3. Check progress:
-   ```bash
-   cat /srv/sync/batch_output_1.xlsx.checkpoint.json
-   cat /srv/sync/retry_queue.json | python -c "import json,sys; print(len(json.load(sys.stdin)))"
-   ```
-
-## Git Commits This Session
+**Git Commits:**
 - `53b05fd` — feat: add autonomous multi-layer batch processor with VIES/web fallback
+- `30d44b4` — docs: update CONTINUE_HERE.md - batch in progress, checkpoint 374/1473
 
-## Time Projection (from checkpoint)
-- Phase 1 remaining: ~1,099 rows @ ~40/min = ~27 min
-- Phase 2 (VIES): ~5 min
-- Phase 3 (Web): ~3 min
-- **Total: ~35 min from checkpoint** → done by ~01:50 UTC
+## Quick Stats
+- Total processed: 1,711
+- Active (0): 1,474 (86.1%)
+- Deleted (1): 236 (13.8%)
+- Unknown (-1): 1 (0.1%)
+
+## Verification Command
+```bash
+cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && python -c "
+import pandas as pd
+df = pd.read_excel('/srv/sync/Unternehmen_checked.xlsx')
+print(df['GELÖSCHT'].value_counts(dropna=False).sort_index())
+"
