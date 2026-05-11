@@ -214,16 +214,34 @@ class NameSimilarity:
     def _normalize_legal_form(self, name: str) -> str:
         """Strip Austrian legal forms for fair comparison."""
         n = name.lower()
+        # Normalize umlauts first (before checking for legal forms)
+        n = n.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
         for form in self._legal_forms:
             # Remove common separators: space, hyphen, dot, comma
             n = re.sub(rf'\b{re.escape(form)}\b', '', n, flags=re.IGNORECASE)
-        # Clean up extra spaces
+        # Clean up extra spaces and trailing separators
         n = re.sub(r'\s+', ' ', n).strip()
+        # Remove trailing separators left behind by legal form stripping (e.g. "m.b.h." → "m.b.h")
+        n = n.rstrip('.,()-')
+        if not n:
+            return ""
         return n
 
     def _tokenize(self, name: str) -> List[str]:
-        """Split name into tokens, strip punctuation."""
-        return [t.strip('.,()-') for t in re.split(r'\s+', name.lower()) if t.strip()]
+        """Split name into tokens, strip punctuation.
+
+        Splits on whitespace AND hyphens so 'alcatel-lucent' becomes
+        ['alcatel', 'lucent'] for better overlap with 'alcatel lucent'.
+        Also strips parenthetical content like '(AUT)' from company names.
+        """
+        tokens = []
+        for t in re.split(r'[\s-]+', name.lower()):
+            # Strip parenthetical content
+            t = re.sub(r'\([^)]*\)', '', t)
+            t = t.strip('.,()-')
+            if t:
+                tokens.append(t)
+        return tokens
 
     def _simple_word_match(self, text: str, keyword: str) -> bool:
         """
@@ -324,18 +342,23 @@ class AddressNormalizer:
         return c
 
     def normalize_street(self, street: str) -> str:
-        """Apply street abbreviation expansion then normalize."""
+        """Apply street abbreviation expansion then normalize.
+
+        Uses negative lookahead regex to safely expand 'str.' → 'strasse'
+        without double-expanding 'strasse' or matching 'str.' in compound words.
+
+        Pattern: str\\.(?![a-zA-Z]) matches 'str.' only when NOT followed by
+        a letter (preventing 'strasse.' matching as 'str' + '.asse').
+        """
         if not street:
             return ""
         s = street.lower().strip()
-        # Abbreviation expansion
-        for abbr, full in self._street_abbrevs.items():
-            # Match word-boundary version of abbreviation
-            pattern = rf'\b{re.escape(abbr)}\b'
-            s = re.sub(pattern, full, s, flags=re.IGNORECASE)
-        # General normalization: lower, no umlauts, no punctuation, no numbers
+        # Abbreviation expansion using negative-lookahead regex
+        # r'str\.(?![a-zA-Z])' matches 'str.' only when NOT followed by a letter
+        s = re.sub(r'str\.(?![a-zA-Z])', 'strasse', s, flags=re.IGNORECASE)
+        # General normalization: no umlauts, no punctuation, no numbers
         s = s.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
-        s = re.sub(r'[^\w\s]', '', s)
+        s = re.sub(r'[^a-z\s]', ' ', s)
         s = re.sub(r'\s+', ' ', s).strip()
         return s
 
