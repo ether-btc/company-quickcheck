@@ -32,6 +32,16 @@ python -m company_quickcheck.cli process \
 
 2. **passes_confidence_gate rejecting None** — rules in `correlation_rules.json` have no explicit `confidence` field (they rely on `confidence_threshold` per rule). `passes_confidence_gate(None, 0.0)` was returning `False`, silently excluding all 4 rules from active rules. Fixed: `None` passes through (no gate). Rules now load: 4/4 active.
 
+3. **`_normalize_legal_form`: umlaut mismatch** — `ÖBB` stayed as `öbb` not `oebb`, causing token_overlap(ÖBB, OEBB) = 0. Fixed: add umlaut normalization before legal-form stripping.
+
+4. **`_normalize_legal_form`: trailing space after stripping** — 'Hubert Häusle ... & Co. KG.' became 'hubert häusle gesellschaft m.b.h. & co. .' with trailing space before dot. Fixed: add `rstrip('.,()-')` after strip.
+
+5. **`_tokenize`: hyphen not split** — 'alcatel-lucent' stayed as single token, giving token_overlap = 0 vs 'Alcatel Lucent'. Fixed: split on `[\s-]+`.
+
+6. **`_tokenize`: parenthetical not stripped** — 'Algorithmics (AUT) GmbH' tokenized to ['algorithmics (aut)', 'gmbh'], reducing overlap with 'Algorithmics GmbH'. Fixed: strip `\([^)]*\)`.
+
+7. **`normalize_street`: str. double-expansion** — 'Hauptstr.' → 'strasse' then 'str' in 'strasse' → 'strasse' giving 'hauptstrasseasse'. Original `\bstr\.\b` regex never matched (no word boundary between 't' and 's'). Fixed: use negative-lookahead regex `r'str\.(?![a-zA-Z])'` — matches 'str.' only when NOT followed by a letter.
+
 ## Remaining Work
 
 ### 1. Threshold Calibration (HIGH PRIORITY)
