@@ -12,6 +12,7 @@ import pandas as pd
 
 from .config import config
 from .api import address_confidence, format_company, is_deleted, search_company
+from .api import search_with_correlation, build_address_fields
 from .rate_limiter import AdaptiveRateLimiter
 
 # Configure logging
@@ -25,7 +26,9 @@ logger = logging.getLogger(__name__)
 def process_batch(input_file: str, output_file: str, limit: int = None,
                   checkpoint_every: int = 25, resume: bool = False,
                   force_start: int = None, use_stealth: bool = False,
-                  adaptive: bool = True) -> dict:
+                  adaptive: bool = True,
+                  correlation_mode: str = "auto",
+                  correlation_min_confidence: float = 0.70) -> dict:
     """
     Process companies with address-aware matching and Firmenbuchnr backfill.
 
@@ -33,6 +36,8 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
                  resuming after a partial test run with known bad output.
     adaptive:    use AdaptiveRateLimiter instead of fixed delay (default True).
                  Set False to preserve the old fixed-sleep behaviour.
+    correlation_mode: CorrelationMatcher mode (auto/strict/lenient, default: auto)
+    correlation_min_confidence: minimum composite confidence to accept (default: 0.70)
     """
     # Validate input file exists
     input_path = Path(input_file)
@@ -109,36 +114,64 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
                     matched = c
                     break
 
-            # No firmenbuchnr match → apply address-confidence logic for single-result
-            if not matched and n_results == 1:
-                company = companies[0]
-                addr = company.get("business-address", {}) or {}
+            # No FB match → apply correlation-enhanced disambiguation
+            if not matched:
+                if n_results == 1:
+                    # Single result: use existing address_confidence
+                    company = companies[0]
+                    addr = company.get("business-address", {}) or {}
 
-                row_street = str(row.get("Hauptadr_Strasse", "")).strip()
-                row_plz = str(row.get("Hauptadr_PLZ", "")).strip()
-                row_city = str(row.get("Hauptadr_Ort", "")).strip()
+                    row_street = str(row.get("Hauptadr_Strasse", "")).strip()
+                    row_plz = str(row.get("Hauptadr_PLZ", "")).strip()
+                    row_city = str(row.get("Hauptadr_Ort", "")).strip()
 
-                api_street = addr.get("street-address", "")
-                api_number = addr.get("street-number", "")
-                api_plz = addr.get("postal-code", "")
-                api_city = addr.get("city", "")
+                    api_street = addr.get("street-address", "")
+                    api_number = addr.get("street-number", "")
+                    api_plz = addr.get("postal-code", "")
+                    api_city = addr.get("city", "")
 
-                confidence = address_confidence(row_street, row_plz, row_city,
-                                                api_street, api_number, api_plz, api_city)
+                    confidence = address_confidence(row_street, row_plz, row_city,
+                                                    api_street, api_number, api_plz, api_city)
 
-                if confidence >= 0.6:
-                    matched = company
-                    fb_api = company.get("reg-no", "").strip()
-                    if fb_api and confidence >= 0.8:
-                        df.at[idx, "Firmenbuchnr"] = fb_api
-                        stats["fb_backfilled"] += 1
-                        logger.info(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
+                    if confidence >= 0.6:
+                        matched = company
+                        fb_api = company.get("reg-no", "").strip()
+                        if fb_api and confidence >= 0.8:
+                            df.at[idx, "Firmenbuchnr"] = fb_api
+                            stats["fb_backfilled"] += 1
+                            logger.info(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
+                    else:
+                        matched = company
+                        logger.warning(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
                 else:
-                    matched = company
-                    logger.warning(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
-            elif not matched:
-                matched = companies[0]
-                logger.info(f"  [{idx}] {firmenname}: {n_results} results, no FB match → using first: {format_company(matched)}")
+                    # Multiple results: use correlation-enhanced disambiguation
+                    uid_input = str(row.get("UID_Nummer", "")).strip()
+                    addr_fields = build_address_fields(row)
+                    matched_company, match_result = search_with_correlation(
+                        name=firmenname,
+                        fb_input=fb_input,
+                        uid_input=uid_input,
+                        address_fields=addr_fields,
+                        candidates=companies,
+                        mode=correlation_mode,
+                        min_confidence=correlation_min_confidence,
+                    )
+                    if matched_company:
+                        matched = matched_company
+                        logger.info(f"  [{idx}] {firmenname}: correlation match (conf={match_result.composite_confidence:.2f}, "
+                                    f"name={match_result.name_confidence:.2f}, addr={match_result.address_confidence:.2f}, "
+                                    f"reason={match_result.fallback_reason}) → {format_company(matched)}")
+                        # Backfill FB if confidence >= 0.80
+                        if match_result.composite_confidence >= 0.80:
+                            fb_api = matched.get("reg-no", "").strip()
+                            if fb_api:
+                                df.at[idx, "Firmenbuchnr"] = fb_api
+                                stats["fb_backfilled"] += 1
+                                logger.info(f"  [{idx}] {firmenname}: correlation FB backfill: {fb_api}")
+                    else:
+                        matched = companies[0]
+                        logger.info(f"  [{idx}] {firmenname}: {n_results} results, no FB match, "
+                                    f"no correlation above threshold → using first: {format_company(matched)}")
 
             # Determine GELÖSCHT status
             if is_deleted(matched):

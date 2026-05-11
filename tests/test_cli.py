@@ -87,7 +87,9 @@ class TestCLI(unittest.TestCase):
             checkpoint_every=25,
             resume=False,
             force_start=None,
-            no_adaptive=False
+            no_adaptive=False,
+            correlation_mode="auto",
+            correlation_min_confidence=0.70,
         ))
 
         self.assertIsNone(result)

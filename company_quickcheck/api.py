@@ -9,12 +9,13 @@ import subprocess
 import time
 import urllib.parse
 import base64
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 from requests.exceptions import RequestException
 
 from .config import config
+from .correlation import build_matcher, MatchResult as CorrelationMatchResult
 
 # Configure logging
 logging.basicConfig(
@@ -233,3 +234,57 @@ def is_deleted(company: Dict) -> bool:
 
 def format_company(company: Dict) -> str:
     return f"{company.get('business-name', '?')} [{company.get('reg-no', '?')} / {company.get('reg-status', '?')}]"
+
+
+# ── Correlation-Enhanced Search ───────────────────────────────────────────────
+
+def build_address_fields(row: Dict) -> Dict:
+    """Extract address fields from a spreadsheet row dict."""
+    return {
+        "name": str(row.get("Firmenname", "")).strip(),
+        "street": str(row.get("Hauptadr_Strasse", "")).strip(),
+        "number": "",  # Spreadsheet may not separate number from street
+        "plz": str(row.get("Hauptadr_PLZ", "")).strip(),
+        "city": str(row.get("Hauptadr_Ort", "")).strip(),
+    }
+
+
+def search_with_correlation(name: str,
+                            fb_input: str,
+                            uid_input: str,
+                            address_fields: Dict,
+                            candidates: List[Dict],
+                            mode: str = "auto",
+                            min_confidence: float = 0.70) -> Tuple[Optional[Dict], CorrelationMatchResult]:
+    """
+    Correlation-enhanced disambiguation of API candidates.
+
+    Uses CorrelationMatcher to score all candidates by weighted multi-field
+    confidence (name similarity + street + city + plz). Falls back to exact
+    FB/UID match before correlation scoring.
+
+    Args:
+        name: company name from input
+        fb_input: firmenbuchnr from input
+        uid_input: uid from input
+        address_fields: dict with keys: name, street, number, plz, city
+        candidates: list of API result dicts
+        mode: matching mode (auto/strict/lenient)
+        min_confidence: minimum composite confidence to accept
+
+    Returns:
+        Tuple of (matched_company_or_None, CorrelationMatchResult)
+    """
+    # Build matcher with defaults from correlation module
+    matcher = build_matcher(mode=mode, min_confidence=min_confidence)
+
+    result = matcher.match(
+        candidates=candidates,
+        fb_input=fb_input,
+        uid_input=uid_input,
+        address_fields=address_fields,
+        mode=mode,
+        min_confidence=min_confidence,
+    )
+
+    return result.company, result

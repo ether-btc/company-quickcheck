@@ -39,6 +39,8 @@ def batch_process(args: argparse.Namespace) -> None:
     resume = args.resume
     force_start = args.force_start
     adaptive = not args.no_adaptive  # flag is --no-adaptive, default True
+    correlation_mode = args.correlation_mode
+    correlation_min_confidence = args.correlation_min_confidence
 
     stats = process_batch(
         input_file,
@@ -48,7 +50,9 @@ def batch_process(args: argparse.Namespace) -> None:
         resume=resume,
         force_start=force_start,
         use_stealth=use_stealth,
-        adaptive=adaptive
+        adaptive=adaptive,
+        correlation_mode=correlation_mode,
+        correlation_min_confidence=correlation_min_confidence,
     )
     sys.exit(0 if stats else 1)
 
@@ -93,6 +97,13 @@ Examples:
     batch_parser.add_argument("--force-start", type=int, help="Force start from row N (0-based)")
     batch_parser.add_argument("--no-adaptive", action="store_true",
                               help="Disable adaptive rate limiting (use fixed delay)")
+    batch_parser.add_argument("--correlation-mode",
+                              choices=["auto", "strict", "lenient"],
+                              default="auto",
+                              help="Correlation matching mode (default: auto)")
+    batch_parser.add_argument("--correlation-min-confidence", type=float,
+                              default=0.70,
+                              help="Minimum correlation confidence threshold (default: 0.70)")
     batch_parser.set_defaults(func=batch_process)
 
     # Parse arguments

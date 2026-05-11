@@ -1,0 +1,134 @@
+{
+  "$schema": "./docs/schema.md",
+  "version": "1.0.0",
+  "description": "AT-specific correlation rules for company-quickcheck correlation-enhanced matching. All rules start as 'proposal' with confidence 0.70 — calibrate against 1,711-row dataset before promoting.",
+  "rules": [
+    {
+      "id": "cr-at-001",
+      "created": "2026-05-11T00:00:00Z",
+      "trigger_context": "at-company-fuzzy-match",
+      "trigger_keywords": [
+        "ag", "gmbh", "gesmbh", "ges.m.b.h.", "og", "kg", "eu",
+        "aktiengesellschaft", "gesellschaft", "haftung"
+      ],
+      "field_weights": {
+        "name": 0.40,
+        "street": 0.30,
+        "city": 0.20,
+        "plz": 0.10
+      },
+      "city_aliases": {
+        "mnk": "münchendorf",
+        "wien": "vienna",
+        "klagenfurt": "klagenfurt",
+        "salzburg": "salzburg",
+        "innsbruck": "innsbruck",
+        "graz": "graz",
+        "linz": "linz"
+      },
+      "street_abbreviations": {
+        "str.": "strasse",
+        "str": "strasse",
+        "gasse": "gasse",
+        "wg": "weg",
+        "pl.": "platz",
+        "av.": "allee"
+      },
+      "confidence_threshold": 0.70,
+      "lifecycle": {
+        "state": "proposal"
+      },
+      "learned_from": "general-company-lookup-accuracy-improvement",
+      "usage_count": 0,
+      "notes": "Austrian legal form handling — strip AG/GmbH/etc. before name comparison to focus on distinctive name part. Confidence 0.70 (proposal) — calibrate against known matches before promoting."
+    },
+    {
+      "id": "cr-at-002",
+      "created": "2026-05-11T00:00:00Z",
+      "trigger_context": "at-address-normalization",
+      "trigger_keywords": [
+        "strasse", "gasse", "weg", "platz", "allee", "straße"
+      ],
+      "field_weights": {
+        "name": 0.30,
+        "street": 0.40,
+        "city": 0.20,
+        "plz": 0.10
+      },
+      "city_aliases": {
+        "mnk": "münchendorf",
+        "wien": "vienna"
+      },
+      "street_abbreviations": {
+        "str.": "strasse",
+        "str": "strasse",
+        "gasse": "gasse",
+        "wg": "weg",
+        "pl.": "platz",
+        "av.": "allee",
+        "straße": "strasse",
+        "strass": "strasse"
+      },
+      "confidence_threshold": 0.70,
+      "lifecycle": {
+        "state": "proposal"
+      },
+      "learned_from": "address-mismatch-in-münchendorf-cases",
+      "usage_count": 0,
+      "notes": "Address normalization — Str./Strasse expansion, city alias for Mnk. Field weights favor street match (0.40) since name may vary more. Confidence 0.70 — validate against cases where street name was key discriminator."
+    },
+    {
+      "id": "cr-at-003",
+      "created": "2026-05-11T00:00:00Z",
+      "trigger_context": "at-multi-candidate-disambiguation",
+      "trigger_keywords": [
+        "multiple", "candidates", "disambiguation", "several"
+      ],
+      "field_weights": {
+        "name": 0.50,
+        "street": 0.25,
+        "city": 0.15,
+        "plz": 0.10
+      },
+      "city_aliases": {},
+      "street_abbreviations": {},
+      "confidence_threshold": 0.80,
+      "lifecycle": {
+        "state": "proposal"
+      },
+      "learned_from": "multi-result-cases-from-batch-run-2026-05-11",
+      "usage_count": 0,
+      "notes": "Multi-candidate disambiguation — when API returns multiple results, use name as primary discriminator (0.50 weight). Higher threshold (0.80) because wrong selection = wrong company status. Validate on batch run results."
+    },
+    {
+      "id": "cr-at-004",
+      "created": "2026-05-11T00:00:00Z",
+      "trigger_context": "at-lenient-mode",
+      "trigger_keywords": [
+        "lenient", "relaxed", "fuzzy"
+      ],
+      "field_weights": {
+        "name": 0.35,
+        "street": 0.25,
+        "city": 0.25,
+        "plz": 0.15
+      },
+      "city_aliases": {
+        "mnk": "münchendorf",
+        "wien": "vienna"
+      },
+      "street_abbreviations": {
+        "str.": "strasse",
+        "str": "strasse",
+        "straße": "strasse"
+      },
+      "confidence_threshold": 0.60,
+      "lifecycle": {
+        "state": "proposal"
+      },
+      "learned_from": "lenient-mode-calibration",
+      "usage_count": 0,
+      "notes": "Lenient mode fallback — reduced threshold (0.60) and postal code ±5 proximity. Use only when strict mode fails. Balance between catching valid fuzzy matches and avoiding false positives."
+    }
+  ]
+}
