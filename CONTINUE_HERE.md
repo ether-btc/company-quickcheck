@@ -1,37 +1,70 @@
-# Company-Quickcheck — COMPLETED 2026-05-11 02:31 UTC
+# company-quickcheck — CONTINUE_HERE (May 12, 2026)
 
-## Final Result: 1,711 Austrian Companies Verified
+## Status: Correlation Feature Implemented ✓
 
-**Output:** `/srv/sync/Unternehmen_checked.xlsx`
+All 48 tests passing. Feature complete and pushed to GitHub.
 
-| GELÖSCHT | Count | Meaning |
-|-----------|-------|---------|
-| 0.0 | 1,474 | Active |
-| 1.0 | 236 | Deleted |
-| -1.0 | 1 | Unknown (WTE Wassertechnik GmbH — VIES invalid, web not found) |
+## What Was Built
 
-**Processing Pipeline:**
-1. Phase 1: opendata.host API — fast pass, 429s skipped to retry queue
-2. Phase 2: VIES VAT validation for ~400 retry firms
-3. Phase 3: Web scrape (firmenbuch.at) for remaining -1
-4. Phase 4: Merge to final output
+Cross-repo transfer from `ether-btc/openclaw-correlation-plugin` into `company-quickcheck` Python skill.
 
-**429 Rate:** ~75% — handled by skip-immediately + retry queue strategy
+### New Files
+- `company_quickcheck/correlation.py` (732 lines) — CorrelationRules, NameSimilarity, AddressNormalizer, CompositeConfidence, CorrelationMatcher, MatchResult, LruRegexCache, passes_confidence_gate()
+- `company_quickcheck/correlation_rules.json` (133 lines) — 4 AT-specific rules (all proposal), city aliases (mnk→münchendorf), street abbreviations, field weights
 
-**Git Commits:**
-- `53b05fd` — feat: add autonomous multi-layer batch processor with VIES/web fallback
-- `30d44b4` — docs: update CONTINUE_HERE.md - batch in progress, checkpoint 374/1473
+### Modified Files
+- `company_quickcheck/api.py` — added `search_with_correlation()`, `build_address_fields()`
+- `company_quickcheck/core.py` — multi-result branch uses `CorrelationMatcher`; new params: `correlation_mode`, `correlation_min_confidence`
+- `company_quickcheck/cli.py` — `--correlation-mode` (auto/strict/lenient), `--correlation-min-confidence` float
 
-## Quick Stats
-- Total processed: 1,711
-- Active (0): 1,474 (86.1%)
-- Deleted (1): 236 (13.8%)
-- Unknown (-1): 1 (0.1%)
-
-## Verification Command
+### CLI Usage
 ```bash
-cd /home/hermes-pi/company-quickcheck && source venv/bin/activate && python -c "
-import pandas as pd
-df = pd.read_excel('/srv/sync/Unternehmen_checked.xlsx')
-print(df['GELÖSCHT'].value_counts(dropna=False).sort_index())
-"
+python -m company_quickcheck.cli process \
+  ~/Unternehmen_sanitized.xlsx \
+  --output ~/companies_checked.xlsx \
+  --correlation-mode auto \
+  --correlation-min-confidence 0.70
+```
+
+## Bugs Fixed During Audit
+
+1. **MatchResult.__repr__ trailing whitespace** — `rule=` slot was present even when `matched_rule_id=None`, producing malformed output like `conf=N/A  company=None`. Fixed: conditional with comma prefix.
+
+2. **passes_confidence_gate rejecting None** — rules in `correlation_rules.json` have no explicit `confidence` field (they rely on `confidence_threshold` per rule). `passes_confidence_gate(None, 0.0)` was returning `False`, silently excluding all 4 rules from active rules. Fixed: `None` passes through (no gate). Rules now load: 4/4 active.
+
+## Remaining Work
+
+### 1. Threshold Calibration (HIGH PRIORITY)
+Validate confidence thresholds against `Unternehmen_sanitized.xlsx` (1,711 rows):
+- `auto` mode: 0.70 threshold — measure precision/recall
+- `lenient` mode: 0.60 threshold — measure improvement in recall with acceptable precision tradeoff
+- All rules currently `proposal` state — calibrate before promoting to `testing`
+
+### 2. Rule Lifecycle Promotion
+After calibration:
+- Rules with precision > 0.90 → promote to `validated`
+- Rules used in ≥ 10 matches with low error rate → promote to `promoted`
+- Update `correlation_rules.json` with `lifecycle.state` changes
+
+### 3. Full End-to-End Test
+```bash
+python -m company_quickcheck.cli process \
+  /srv/sync/Unternehmen_sanitized.xlsx \
+  --output /srv/sync/companies_checked.xlsx \
+  --correlation-mode auto \
+  --correlation-min-confidence 0.70
+```
+
+### 4. FB Backfill Threshold
+Currently set to 0.80 — verify against dataset. Is 0.80 too high/low for AT company data?
+
+## Git Log
+- `2c15daf` feat: add correlation-enhanced matching for multi-candidate disambiguation
+- `3b1a5fe` fix: MatchResult.__repr__ trailing whitespace, pass_confidence_gate accepts None
+
+## Key Design Decisions
+- `strict` mode: exact FB/UID only, no fuzzy correlation (legacy behavior preserved)
+- `lenient`: relaxed threshold -0.10, postal ±5 proximity
+- mtime-cached rules: no parse overhead on repeated calls
+- LRU regex cache (500 entries): prevents ReDoS, shared across NameSimilarity + AddressNormalizer
+- `passes_confidence_gate()`: filters NaN/zero/negative; `None` passes (no gate — for rules without explicit confidence field)
