@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: company-quickcheck
-Version: 0.1.0
+Version: 1.2.0
 Summary: Batch Austrian company status checker using opendata.host API
 Home-page: https://github.com/ether-btc/company-quickcheck
 Author: Hermes Agent
@@ -107,6 +107,12 @@ Set `OPENDATA_API_KEY` in environment:
 
 ```bash
 export OPENDATA_API_KEY="your-api-key-here"
+```
+
+If storing the key in `~/.hermes/config.yaml`, ensure the file has restricted permissions:
+
+```bash
+chmod 600 ~/.hermes/config.yaml
 ```
 
 ## stealth-core Integration

@@ -18,7 +18,15 @@ existing = pd.read_excel(existing_path)
 new_batch = pd.read_excel(new_batch_path)
 
 # Verify no NaN in GELOESCHT of new batch
-gelo_col = [c for c in new_batch.columns if 'GEL' in c][0]
+# Robust column detection: prefer exact matches, then fuzzy
+gelo_candidates = [c for c in new_batch.columns if c == "GELÖSCHT"]
+if not gelo_candidates:
+    gelo_candidates = [c for c in new_batch.columns if c == "GELOESCHT"]
+if not gelo_candidates:
+    gelo_candidates = [c for c in new_batch.columns if "GEL" in c]
+if not gelo_candidates:
+    raise ValueError(f"No GELOESCHT/GELÖSCHT column found. Columns: {list(new_batch.columns)}")
+gelo_col = gelo_candidates[0]
 nan_count = new_batch[gelo_col].isna().sum()
 if nan_count > 0:
     print(f"WARNING: new batch has {nan_count} NaN in GELOESCHT column!")

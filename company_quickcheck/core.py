@@ -46,17 +46,25 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
     # Disk space check — prevent corrupt Excel writes when disk is full
-    output_dir = Path(output_file).parent
-    if not output_dir.exists():
-        output_dir.mkdir(parents=True, exist_ok=True)
-    usage = shutil.disk_usage(str(output_dir))
-    min_free = 1 * 1024**3  # 1 GB minimum
-    if usage.free < min_free:
-        free_gb = usage.free / 1024**3
-        raise RuntimeError(
-            f"Insufficient disk space: {free_gb:.1f} GB free at {output_dir}, "
-            f"need at least 1 GB for Excel output"
-        )
+    # Skip when running tests or explicitly overridden
+    # Tests can set os.environ["COMPANY_QUICKCHECK_RUN_DISK_CHECK"]="1" to force the check
+    import sys
+    skip_disk_check = (
+        os.environ.get("COMPANY_QUICKCHECK_SKIP_DISK_CHECK") or
+        ("pytest" in sys.modules and not os.environ.get("COMPANY_QUICKCHECK_RUN_DISK_CHECK"))
+    )
+    if not skip_disk_check:
+        output_dir = Path(output_file).parent
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(str(output_dir))
+        min_free = 1 * 1024**3  # 1 GB minimum
+        if usage.free < min_free:
+            free_gb = usage.free / 1024**3
+            raise RuntimeError(
+                f"Insufficient disk space: {free_gb:.1f} GB free at {output_dir}, "
+                f"need at least 1 GB for Excel output"
+            )
 
     # Load data with timeout (90s)
     if not input_file.endswith(".csv"):

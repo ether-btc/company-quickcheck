@@ -211,10 +211,16 @@ class TestDiskSpaceCheck(unittest.TestCase):
     @patch("company_quickcheck.core.shutil.disk_usage")
     def test_insufficient_disk_space_raises(self, mock_disk_usage):
         """Should raise RuntimeError when disk space < 1 GB."""
-        mock_disk_usage.return_value = Mock(free=500 * 1024**2)  # 500 MB
-        with self.assertRaises(RuntimeError) as ctx:
-            process_batch(self.input_file, self.output_file)
-        self.assertIn("Insufficient disk space", str(ctx.exception))
+        import os
+        # Force disk check to run even under pytest
+        os.environ["COMPANY_QUICKCHECK_RUN_DISK_CHECK"] = "1"
+        try:
+            mock_disk_usage.return_value = Mock(free=500 * 1024**2)  # 500 MB
+            with self.assertRaises(RuntimeError) as ctx:
+                process_batch(self.input_file, self.output_file)
+            self.assertIn("Insufficient disk space", str(ctx.exception))
+        finally:
+            os.environ.pop("COMPANY_QUICKCHECK_RUN_DISK_CHECK", None)
 
     @patch("company_quickcheck.core.shutil.disk_usage")
     @patch("company_quickcheck.core.search_company")

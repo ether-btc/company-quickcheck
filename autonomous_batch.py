@@ -143,6 +143,7 @@ def run_phase1():
     base_url = "https://api.opendata.host/1.0/registered-companies/find"
 
     retry_queue = []
+    last_processed_idx = start_idx - 1
 
     for idx, row in df.iterrows():
         row_idx = df.index.get_loc(idx)
@@ -220,10 +221,11 @@ def run_phase1():
             logger.info(f"[CKPT {row_idx+1}/{total}] checked={stats['checked']} del={stats['deleted']} act={stats['active']} -1={stats['not_found']} err={stats['errors']} 429={stats['skipped_429']} retry_queue={len(retry_queue)}")
 
         # Small delay between requests (avoid 429 burst)
+        last_processed_idx = row_idx
         time.sleep(1.0)
 
-    # Final save
-    save_checkpoint(row_idx, stats)
+    # Final checkpoint
+    save_checkpoint(last_processed_idx, stats)
     df.to_excel(OUTPUT_FILE, index=False)
     save_retry_queue(retry_queue)
 

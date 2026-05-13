@@ -148,9 +148,9 @@ class TestSearchOpendata(unittest.TestCase):
         mock_response.headers = {}
         mock_get.return_value = mock_response
 
-        # The function should print an error and return None
-        result = search_opendata("Test AG")
-        self.assertIsNone(result)
+        # 401 should raise PermissionError so caller can distinguish from network errors
+        with self.assertRaises(PermissionError):
+            search_opendata("Test AG")
 
     @patch("requests.get")
     def test_exception(self, mock_get):

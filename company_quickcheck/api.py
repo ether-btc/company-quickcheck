@@ -46,8 +46,6 @@ def normalize_address(addr: str, country: str = "AT") -> str:
         # Common abbreviations
         # Match "str." or "str" at the end of a word (before a word boundary)
         addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
-        addr = re.sub(r"gasse(?=\b)", "gasse", addr)
-    # Add more country-specific rules as needed
 
     # Remove punctuation, extra spaces (common to all countries)
     addr = re.sub(r"[^\w\s]", "", addr)
@@ -142,15 +140,26 @@ def search_opendata(name: str, limit: int = 5,
         result = resp.json()
         logger.info(f"Opendata search successful: {len(result.get('companies', []))} results")
         return result
+    except PermissionError:
+        raise
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error in opendata search: {e}")
+        return None
+    except (requests.exceptions.JSONDecodeError, ValueError) as e:
+        logger.error(f"Invalid JSON from opendata API: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Error in opendata search: {e}")
+        logger.error(f"Unexpected error in opendata search: {e}")
         return None
 
 
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
-    """Search using stealth-core as subprocess."""
+    """Search using stealth-core as subprocess.
+
+    API credentials are passed via a temporary file (mode 0o600) to avoid
+    exposing them in /proc/*/cmdline.
+    """
     import json
-    import base64
 
     # Check if stealth-core is available in PATH
     if not shutil.which("stealth-core"):
@@ -172,41 +181,64 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
     headers_json = json.dumps({"Authorization": auth_header})
 
-    cmd = [
-        "stealth-core",
-        "-c", stealth_config,
-        "fetch",
-        full_url,
-        "--headers", headers_json
-    ]
-
+    # Write headers to a restricted temp file to avoid exposing the API key
+    # on the command line (visible in /proc/*/cmdline to other users).
+    hdr_path: Optional[str] = None
     try:
+        import tempfile
+        hdr_fd, hdr_path = tempfile.mkstemp(suffix=".json", prefix="sc_headers_")
+        os.write(hdr_fd, headers_json.encode())
+        os.close(hdr_fd)
+        os.chmod(hdr_path, 0o600)
+
+        cmd = [
+            "stealth-core",
+            "-c", stealth_config,
+            "fetch",
+            full_url,
+            "--headers-file", hdr_path,
+        ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            logger.error(f"Stealth-core error: {result.stderr}")
-            return None
+    except (AttributeError, TypeError, FileNotFoundError):
+        # stealth-core does not support --headers-file; fall back to --headers
+        logger.warning("stealth-core --headers-file not supported, falling back to --headers")
+        cmd = [
+            "stealth-core",
+            "-c", stealth_config,
+            "fetch",
+            full_url,
+            "--headers", headers_json,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    finally:
+        if hdr_path:
+            try:
+                os.unlink(hdr_path)
+            except OSError:
+                pass
 
-        # Parse the stdout to extract JSON body
-        output_lines = result.stdout.splitlines()
-        json_start = None
-        for i, line in enumerate(output_lines):
-            stripped = line.strip()
-            if stripped.startswith('{') or stripped.startswith('['):
-                json_start = i
-                break
+    if result.returncode != 0:
+        logger.error(f"Stealth-core error: {result.stderr}")
+        return None
 
-        if json_start is None:
-            logger.error("No JSON body found in stealth-core output")
-            return None
+    # Parse the stdout to extract JSON body
+    output_lines = result.stdout.splitlines()
+    json_start = None
+    for i, line in enumerate(output_lines):
+        stripped = line.strip()
+        if stripped.startswith('{') or stripped.startswith('['):
+            json_start = i
+            break
 
-        json_str = '\n'.join(output_lines[json_start:])
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            return None
-    except Exception as e:
-        logger.error(f"Stealth-core exception: {e}")
+    if json_start is None:
+        logger.error("No JSON body found in stealth-core output")
+        return None
+
+    json_str = '\n'.join(output_lines[json_start:])
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
         return None
 
 

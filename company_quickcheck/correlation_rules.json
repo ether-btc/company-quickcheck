@@ -19,7 +19,7 @@
       },
       "city_aliases": {
         "mnk": "münchendorf",
-        "wien": "vienna",
+        "vienna": "wien",
         "klagenfurt": "klagenfurt",
         "salzburg": "salzburg",
         "innsbruck": "innsbruck",
@@ -29,7 +29,7 @@
       "street_abbreviations": {
         "str.": "strasse",
         "str": "strasse",
-        "gasse": "gasse",
+        "g.": "gasse",
         "wg": "weg",
         "pl.": "platz",
         "av.": "allee"

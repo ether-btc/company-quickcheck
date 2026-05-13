@@ -2,7 +2,20 @@
 """Company QuickCheck Austria: Batch Austrian company status checker."""
 
 
-__version__ = "0.1.0"
+# Version is managed by pyproject.toml; read at runtime via importlib.metadata
+try:
+    from importlib.metadata import version
+    __version__ = version("company-quickcheck")
+except (ImportError, Exception):
+    # Fallback: read from pyproject.toml when not installed
+    import os, re
+    _pyproject = os.path.join(os.path.dirname(os.path.dirname(__file__)), "pyproject.toml")
+    try:
+        with open(_pyproject) as f:
+            m = re.search(r'version\s*=\s*["\']([^"\']+)["\']', f.read())
+            __version__ = m.group(1) if m else "0.1.0"
+    except Exception:
+        __version__ = "0.1.0"
 
 
 from .core import process_batch

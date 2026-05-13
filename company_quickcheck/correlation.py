@@ -48,7 +48,7 @@ DEFAULT_LEGAL_FORMS = {
 DEFAULT_STREET_ABBREVS = {
     "str.": "strasse",
     "str": "strasse",
-    "gasse": "gasse",
+    "g.": "gasse",
     "wg": "weg",
     "pl.": "platz",
     "av.": "allee",
@@ -57,6 +57,7 @@ DEFAULT_STREET_ABBREVS = {
 # Default city aliases (common AT municipality abbreviations)
 DEFAULT_CITY_ALIASES: Dict[str, str] = {
     "wien": "wien",
+    "vienna": "wien",
     "klagenfurt": "klagenfurt",
     "salzburg": "salzburg",
     "innsbruck": "innsbruck",
@@ -267,7 +268,7 @@ class NameSimilarity:
             compiled = re.compile(rf'\b{escaped}\b', re.IGNORECASE | re.UNICODE)
             self._cache.put(keyword, compiled)
             cached_re = compiled
-        return bool(cached_re.test(text))
+        return bool(cached_re.search(text))
 
     def token_overlap(self, name_a: str, name_b: str) -> float:
         """
