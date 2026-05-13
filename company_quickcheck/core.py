@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -44,6 +45,19 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
+    # Disk space check — prevent corrupt Excel writes when disk is full
+    output_dir = Path(output_file).parent
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(str(output_dir))
+    min_free = 1 * 1024**3  # 1 GB minimum
+    if usage.free < min_free:
+        free_gb = usage.free / 1024**3
+        raise RuntimeError(
+            f"Insufficient disk space: {free_gb:.1f} GB free at {output_dir}, "
+            f"need at least 1 GB for Excel output"
+        )
+
     # Load data with timeout (90s)
     if not input_file.endswith(".csv"):
         with ThreadPoolExecutor(max_workers=1) as ex:
@@ -52,7 +66,18 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     else:
         df = pd.read_csv(input_file)
 
-    if limit:
+    # === Row slicing: handle limit, force_start, and their interaction ===
+    # BUG FIX: Force-start + limit NOOP bug.
+    # Old code: df.head(limit) first (rows 0-99), then force_start skips all (idx 0-99 < 150 → 0 rows).
+    # New code: apply force_start slice first, then limit from the remaining rows.
+    if force_start is not None and limit is not None:
+        df = df.iloc[force_start:force_start + limit].copy()
+        # Reindex to match original row numbers (for df.at writes and logging)
+        df.index = range(force_start, force_start + len(df))
+    elif force_start is not None:
+        df = df.iloc[force_start:].copy()
+        df.index = range(force_start, force_start + len(df))
+    elif limit is not None:
         df = df.head(limit).copy()
 
     total = len(df)
@@ -63,15 +88,45 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     if "AA" not in df.columns:
         df["AA"] = ""
 
-    # Checkpoint resume
+    # Checkpoint resume — priority 1: .checkpoint.json (interrupted run)
+    # Priority 2: existing output file (completed run, checkpoint deleted)
     start_idx = 0
     if resume and force_start is None and os.path.exists(output_file + ".checkpoint.json"):
         with open(output_file + ".checkpoint.json") as f:
             ck = json.load(f)
             start_idx = ck.get("last_idx", 0) + 1
-            logger.info(f"[RESUME] Starting from row {start_idx}")
+            logger.info(f"[RESUME] Starting from row {start_idx} (checkpoint)")
+    elif resume and force_start is None and os.path.exists(output_file):
+        # Smart resume: read existing output, skip rows with filled GELÖSCHT
+        try:
+            if output_file.endswith(".csv"):
+                existing_df = pd.read_csv(output_file)
+            else:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(pd.read_excel, output_file)
+                    existing_df = future.result(timeout=90)
+            if "GELÖSCHT" in existing_df.columns:
+                filled_mask = existing_df["GELÖSCHT"].notna()
+                filled_count = filled_mask.sum()
+                # Find last contiguous filled row (gaps indicate incomplete batch)
+                last_filled = -1
+                for i in range(len(existing_df)):
+                    if filled_mask.iloc[i]:
+                        last_filled = i
+                    else:
+                        break  # stop at first gap
+                if last_filled >= 0:
+                    start_idx = last_filled + 1
+                    logger.info(
+                        f"[RESUME] Output file has {filled_count}/{len(existing_df)} "
+                        f"filled rows, resuming from row {start_idx}"
+                    )
+                else:
+                    logger.info(f"[RESUME] Output file exists but no filled GELÖSCHT rows")
+        except Exception as e:
+            logger.warning(f"[RESUME] Failed to read existing output: {e} — starting from 0")
     elif force_start is not None:
-        start_idx = force_start
+        start_idx = force_start if force_start < total else 0
         logger.info(f"[FORCE START] Starting from row {start_idx}")
 
     stats = {"checked": 0, "deleted": 0, "active": 0, "not_found": 0, "errors": 0, "fb_backfilled": 0}
