@@ -1,62 +1,51 @@
-# firmen-quickcheck — CONTINUE_HERE.md
+# Company QuickCheck - Session Continuation
 
-## Session: May 13, 2026 — Core Bug Fixes (v1.2)
+## Last Session: 2026-05-13
 
-### What Changed
+### Commit: 535387f (master pushed to origin)
+**URL:** https://github.com/ether-btc/company-quickcheck/commit/535387f
 
-**3 critical bugs fixed in `core.py`**, all with tests and GitHub pushed.
+### What was done:
+- OCR audit scan using `@opencodereview/cli` v2.1.1 (raye-deng) — score 75/100 (C PASSED)
+- Batch of 8 critical/medium bug fixes applied and tested
+- All 55 unit tests pass
 
-| Priority | Bug | Fix | Status |
-|----------|-----|-----|--------|
-| 1 | `--force-start N --limit M` = 0 rows (NOOP) | `df.iloc[force_start:force_start+limit]` + reindex | ✅ Fixed + tested |
-| 2 | `--resume` unaware of completed output reads `GELÖSCHT`, resumes from first NaN gap | Reads existing output, resumes from first NaN gap | ✅ Fixed + tested |
-| 3 | Disk-full → corrupt Excel output | `shutil.disk_usage()` pre-check, aborts if <1GB | ✅ Fixed + tested |
+### Fixes applied:
+1. **BUG-03 (CRITICAL):** correlation.py `.test()` → `.search()` 
+2. **BUG-01 (HIGH):** api.py 401 PermissionError re-raise
+3. **SEC-02 (HIGH):** stealth-core API key via temp file (0o600)
+4. **BUG-06 (MEDIUM):** autonomous_batch.py row_idx UnboundLocalError
+5. **BUG-07 (MEDIUM):** merge_batches.py robust column detection
+6. **BUG-08 (MEDIUM):** city_aliases wrong direction (vienna→wien)
+7. **BUG-02 (MEDIUM):** normalize_address no-op regex → g. abbreviation
+8. **CQ-03 (MEDIUM):** Version mismatch fixed via importlib.metadata
 
-**New test file**: `tests/test_fixes.py` — 7 unit tests covering all 3 fixes.
-**Test suite**: 55/55 pass (48 existing + 7 new).
-**`.gitignore`**: Added (was missing — pycache, venv, dist files no longer tracked).
+### Remaining from audit (not yet addressed):
+- **CQ-01:** Duplicate normalize_address in legacy scripts
+- **CQ-02:** Duplicate logging.basicConfig across modules
+- **CQ-04:** Missing JSONDecodeError handling (partially done)
+- **CQ-05:** setup.py legacy file should be removed
+- **CQ-07:** search_with_correlation redundant parameters
+- **REL-01:** No retry logic for transient network failures
+- **REL-04:** Checkpoint write fails silently on full disk
+- **REL-05:** autonomous_batch.py signal handling (imports signal but unused)
+- **REL-06:** No input/output file same-file check
+- **MAINT-01:** Version inconsistency (fixed via importlib)
+- **MAINT-04:** Legacy script firmen_quickcheck.py not in sync
+- **MAINT-05:** correlation_rules.json all rules in "proposal" state
+- **MAINT-06:** Mixed print() and logging usage
+- **MAINT-07:** Python 3.8+ type hint inconsistency
+- **TST-02:** Zero test coverage for correlation.py (757 lines)
+- **TST-03:** No tests for config.py
+- **TST-04:** No tests for autonomous_batch.py (411 lines)
+- **TST-05:** No tests for merge_batches.py
+- **TST-06:** Test fixtures use hardcoded temp files in CWD
 
-### Commits
+### Tooling installed:
+- OCR v2.1.1 (raye-deng/open-code-review) at `~/.local/bin/ocr`
+- Spencermarx's @open-code-review/cli removed
 
-| SHA | Message |
-|-----|---------|
-| `cef7a70` | fix(core): 3 critical bug fixes — force-start/limit NOOP, smart resume, disk space check |
-| `b6da76b` | chore: add `.gitignore` for pycache, venv, dist, pytest, IDE files |
-
-**Branch**: `master` → pushed to `origin/master` (`ether-btc/company-quickcheck`).
-**Tag**: None yet — consider `git tag v1.2.0` when ready for release.
-
-### Remaining Work (Lower Priority)
-
-| Issue | Description | Effort |
-|-------|-------------|--------|
-| Rate limiter state loss on resume | `AdaptiveRateLimiter` resets to 1.1s on each `process_batch()` call. See `autonomous_batch.py` two-phase retry queue pattern. | Medium |
-| Output file overwrite on fresh runs | `--force-start 0 --limit 100` on file with rows 100-149 filled still overwrites rows 100-149. Use `scripts/merge_batches.py` as workaround. | Low |
-| `pyproject.toml` version | Still at `0.1.0` — should bump to `0.2.0` or `1.2.0` to match skill. | Trivial |
-
-### How to Resume
-
-```bash
-cd /home/hermes-pi/company-quickcheck
-source venv/bin/activate
-
-# Verify state
-git pull origin master
-python -m pytest tests/ -v
-
-# Quick smoke test
-python -m company_quickcheck check "Wienerberger AG"
-```
-
-### Files Modified
-
-- `company_quickcheck/core.py` — row slicing fix, smart resume, disk check
-- `tests/test_fixes.py` — 7 new tests (new file)
-- `.gitignore` — new file
-- `~/.hermes/skills/data-science/firmen-quickcheck/SKILL.md` — version 1.2, docs updated
-
-### Key Artifacts
-
-- Input: `/tmp/companies.xlsx` (1,711 rows)
-- Output: `/srv/sync/companies_checked.xlsx` (150 rows processed: 56 active, 43 deleted, 51 not found)
-- API key: `OPENDATA_API_KEY` in `~/.hermes/.env`
+### How to resume:
+1. `cd ~/company-quickcheck`
+2. `./venv/bin/python -m pytest tests/ -v` (55 tests should pass)
+3. Pick remaining items from the list above
