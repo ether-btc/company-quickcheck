@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "company-quickcheck"
-version = "0.1.0"
+version = "1.2.0"
 description = "Batch Austrian company status checker using opendata.host API"
 readme = "README.md"
 authors = [{name = "Hermes Agent", email = "hermes-pi@raspberrypi.local"}]

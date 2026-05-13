@@ -1,80 +1,62 @@
-# company-quickcheck — CONTINUE_HERE (May 12, 2026)
+# firmen-quickcheck — CONTINUE_HERE.md
 
-## Status: Correlation Feature Implemented ✓
+## Session: May 13, 2026 — Core Bug Fixes (v1.2)
 
-All 48 tests passing. Feature complete and pushed to GitHub.
+### What Changed
 
-## What Was Built
+**3 critical bugs fixed in `core.py`**, all with tests and GitHub pushed.
 
-Cross-repo transfer from `ether-btc/openclaw-correlation-plugin` into `company-quickcheck` Python skill.
+| Priority | Bug | Fix | Status |
+|----------|-----|-----|--------|
+| 1 | `--force-start N --limit M` = 0 rows (NOOP) | `df.iloc[force_start:force_start+limit]` + reindex | ✅ Fixed + tested |
+| 2 | `--resume` unaware of completed output reads `GELÖSCHT`, resumes from first NaN gap | Reads existing output, resumes from first NaN gap | ✅ Fixed + tested |
+| 3 | Disk-full → corrupt Excel output | `shutil.disk_usage()` pre-check, aborts if <1GB | ✅ Fixed + tested |
 
-### New Files
-- `company_quickcheck/correlation.py` (732 lines) — CorrelationRules, NameSimilarity, AddressNormalizer, CompositeConfidence, CorrelationMatcher, MatchResult, LruRegexCache, passes_confidence_gate()
-- `company_quickcheck/correlation_rules.json` (133 lines) — 4 AT-specific rules (all proposal), city aliases (mnk→münchendorf), street abbreviations, field weights
+**New test file**: `tests/test_fixes.py` — 7 unit tests covering all 3 fixes.
+**Test suite**: 55/55 pass (48 existing + 7 new).
+**`.gitignore`**: Added (was missing — pycache, venv, dist files no longer tracked).
 
-### Modified Files
-- `company_quickcheck/api.py` — added `search_with_correlation()`, `build_address_fields()`
-- `company_quickcheck/core.py` — multi-result branch uses `CorrelationMatcher`; new params: `correlation_mode`, `correlation_min_confidence`
-- `company_quickcheck/cli.py` — `--correlation-mode` (auto/strict/lenient), `--correlation-min-confidence` float
+### Commits
 
-### CLI Usage
+| SHA | Message |
+|-----|---------|
+| `cef7a70` | fix(core): 3 critical bug fixes — force-start/limit NOOP, smart resume, disk space check |
+| `b6da76b` | chore: add `.gitignore` for pycache, venv, dist, pytest, IDE files |
+
+**Branch**: `master` → pushed to `origin/master` (`ether-btc/company-quickcheck`).
+**Tag**: None yet — consider `git tag v1.2.0` when ready for release.
+
+### Remaining Work (Lower Priority)
+
+| Issue | Description | Effort |
+|-------|-------------|--------|
+| Rate limiter state loss on resume | `AdaptiveRateLimiter` resets to 1.1s on each `process_batch()` call. See `autonomous_batch.py` two-phase retry queue pattern. | Medium |
+| Output file overwrite on fresh runs | `--force-start 0 --limit 100` on file with rows 100-149 filled still overwrites rows 100-149. Use `scripts/merge_batches.py` as workaround. | Low |
+| `pyproject.toml` version | Still at `0.1.0` — should bump to `0.2.0` or `1.2.0` to match skill. | Trivial |
+
+### How to Resume
+
 ```bash
-python -m company_quickcheck.cli process \
-  ~/Unternehmen_sanitized.xlsx \
-  --output ~/companies_checked.xlsx \
-  --correlation-mode auto \
-  --correlation-min-confidence 0.70
+cd /home/hermes-pi/company-quickcheck
+source venv/bin/activate
+
+# Verify state
+git pull origin master
+python -m pytest tests/ -v
+
+# Quick smoke test
+python -m company_quickcheck check "Wienerberger AG"
 ```
 
-## Bugs Fixed During Audit
+### Files Modified
 
-1. **MatchResult.__repr__ trailing whitespace** — `rule=` slot was present even when `matched_rule_id=None`, producing malformed output like `conf=N/A  company=None`. Fixed: conditional with comma prefix.
+- `company_quickcheck/core.py` — row slicing fix, smart resume, disk check
+- `tests/test_fixes.py` — 7 new tests (new file)
+- `.gitignore` — new file
+- `~/.hermes/skills/data-science/firmen-quickcheck/SKILL.md` — version 1.2, docs updated
 
-2. **passes_confidence_gate rejecting None** — rules in `correlation_rules.json` have no explicit `confidence` field (they rely on `confidence_threshold` per rule). `passes_confidence_gate(None, 0.0)` was returning `False`, silently excluding all 4 rules from active rules. Fixed: `None` passes through (no gate). Rules now load: 4/4 active.
+### Key Artifacts
 
-3. **`_normalize_legal_form`: umlaut mismatch** — `ÖBB` stayed as `öbb` not `oebb`, causing token_overlap(ÖBB, OEBB) = 0. Fixed: add umlaut normalization before legal-form stripping.
-
-4. **`_normalize_legal_form`: trailing space after stripping** — 'Hubert Häusle ... & Co. KG.' became 'hubert häusle gesellschaft m.b.h. & co. .' with trailing space before dot. Fixed: add `rstrip('.,()-')` after strip.
-
-5. **`_tokenize`: hyphen not split** — 'alcatel-lucent' stayed as single token, giving token_overlap = 0 vs 'Alcatel Lucent'. Fixed: split on `[\s-]+`.
-
-6. **`_tokenize`: parenthetical not stripped** — 'Algorithmics (AUT) GmbH' tokenized to ['algorithmics (aut)', 'gmbh'], reducing overlap with 'Algorithmics GmbH'. Fixed: strip `\([^)]*\)`.
-
-7. **`normalize_street`: str. double-expansion** — 'Hauptstr.' → 'strasse' then 'str' in 'strasse' → 'strasse' giving 'hauptstrasseasse'. Original `\bstr\.\b` regex never matched (no word boundary between 't' and 's'). Fixed: use negative-lookahead regex `r'str\.(?![a-zA-Z])'` — matches 'str.' only when NOT followed by a letter.
-
-## Remaining Work
-
-### 1. Threshold Calibration (HIGH PRIORITY)
-Validate confidence thresholds against `Unternehmen_sanitized.xlsx` (1,711 rows):
-- `auto` mode: 0.70 threshold — measure precision/recall
-- `lenient` mode: 0.60 threshold — measure improvement in recall with acceptable precision tradeoff
-- All rules currently `proposal` state — calibrate before promoting to `testing`
-
-### 2. Rule Lifecycle Promotion
-After calibration:
-- Rules with precision > 0.90 → promote to `validated`
-- Rules used in ≥ 10 matches with low error rate → promote to `promoted`
-- Update `correlation_rules.json` with `lifecycle.state` changes
-
-### 3. Full End-to-End Test
-```bash
-python -m company_quickcheck.cli process \
-  /srv/sync/Unternehmen_sanitized.xlsx \
-  --output /srv/sync/companies_checked.xlsx \
-  --correlation-mode auto \
-  --correlation-min-confidence 0.70
-```
-
-### 4. FB Backfill Threshold
-Currently set to 0.80 — verify against dataset. Is 0.80 too high/low for AT company data?
-
-## Git Log
-- `2c15daf` feat: add correlation-enhanced matching for multi-candidate disambiguation
-- `3b1a5fe` fix: MatchResult.__repr__ trailing whitespace, pass_confidence_gate accepts None
-
-## Key Design Decisions
-- `strict` mode: exact FB/UID only, no fuzzy correlation (legacy behavior preserved)
-- `lenient`: relaxed threshold -0.10, postal ±5 proximity
-- mtime-cached rules: no parse overhead on repeated calls
-- LRU regex cache (500 entries): prevents ReDoS, shared across NameSimilarity + AddressNormalizer
-- `passes_confidence_gate()`: filters NaN/zero/negative; `None` passes (no gate — for rules without explicit confidence field)
+- Input: `/tmp/companies.xlsx` (1,711 rows)
+- Output: `/srv/sync/companies_checked.xlsx` (150 rows processed: 56 active, 43 deleted, 51 not found)
+- API key: `OPENDATA_API_KEY` in `~/.hermes/.env`
