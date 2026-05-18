@@ -3,6 +3,7 @@
 
 import os
 import json
+import requests
 import unittest
 from unittest.mock import patch, Mock
 from company_quickcheck.api import (
@@ -158,6 +159,116 @@ class TestSearchOpendata(unittest.TestCase):
         result = search_opendata("Test AG")
         self.assertIsNone(result)
 
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_timeout_retries_exhausted(self, mock_get, mock_sleep):
+        """Timeout should retry max_retries times then return None."""
+        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 3)
+        # Exponential backoff: 2^0=1s, 2^1=2s
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_timeout_succeeds_on_retry(self, mock_get, mock_sleep):
+        """Timeout should succeed if retry returns valid response."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"size": 1, "companies": []}
+        mock_response.headers = {}
+        # First call times out, second succeeds
+        mock_get.side_effect = [requests.exceptions.Timeout("timed out"), mock_response]
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["size"], 1)
+        self.assertEqual(mock_get.call_count, 2)
+        mock_sleep.assert_called_once_with(1)
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_connection_error_retries(self, mock_get, mock_sleep):
+        """ConnectionError should retry then return None if all fail."""
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection reset")
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_502_retries_exhausted(self, mock_get, mock_sleep):
+        """HTTP 502 should retry and return None after max_retries."""
+        responses = [Mock(status_code=502) for _ in range(3)]
+        for r in responses:
+            r.headers = {}
+        mock_get.side_effect = responses
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 3)
+        mock_sleep.assert_any_call(1)  # 2^0
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_503_succeeds_on_third_attempt(self, mock_get, mock_sleep):
+        """503 should succeed if third attempt returns 200."""
+        responses = [
+            Mock(status_code=503, headers={}),
+            Mock(status_code=503, headers={}),
+            Mock(status_code=200, headers={}, json=lambda: {"size": 1, "companies": [{"business-name": "Test AG"}]}),
+        ]
+        mock_get.side_effect = responses
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["size"], 1)
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_504_returns_none_after_retries(self, mock_get, mock_sleep):
+        """504 should return None after exhausting retries."""
+        responses = [Mock(status_code=504, headers={}) for _ in range(3)]
+        mock_get.side_effect = responses
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 3)
+
+    @patch("company_quickcheck.api.time.sleep")
+    @patch("requests.get")
+    def test_json_decode_error_retries(self, mock_get, mock_sleep):
+        """JSON decode error should retry then succeed if response is valid on retry."""
+        # First call: JSONDecodeError (simulates malformed response)
+        # Second call: valid response with proper JSON
+        mock_fail = Mock()
+        mock_fail.status_code = 200
+        mock_fail.headers = {}
+        mock_fail.json.side_effect = requests.exceptions.JSONDecodeError("Invalid", "", 0)
+
+        mock_ok = Mock()
+        mock_ok.status_code = 200
+        mock_ok.headers = {}
+        mock_ok.json.return_value = {"size": 1, "companies": [{"business-name": "Test AG"}]}
+
+        mock_get.side_effect = [mock_fail, mock_ok]
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["size"], 1)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("requests.get")
+    def test_non_retryable_http_error_no_retry(self, mock_get):
+        """Non-retryable HTTP error (e.g. 400) should not retry."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.headers = {}
+        mock_response.reason = "Bad Request"
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Bad Request", response=mock_response)
+        mock_get.return_value = mock_response
+        result = search_opendata("Test AG", max_retries=3)
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 1)  # No retries for non-retryable errors
+
 
 class TestStealthCoreSearch(unittest.TestCase):
     @patch("company_quickcheck.api.shutil.which")
@@ -166,7 +277,15 @@ class TestStealthCoreSearch(unittest.TestCase):
         mock_which.return_value = True  # stealth-core found in PATH
         mock_result = Mock()
         mock_result.returncode = 0
-        mock_result.stdout = "{\"size\": 1, \"companies\": [{\"business-name\": \"Test AG\"}]}"
+        # New format: tracing line + HTTP/1.1 status + Content-Length + blank line + JSON body
+        mock_result.stdout = (
+            '{"timestamp":"2026-05-18T09:00:00.000000Z","level":"INFO","fields":{"message":"Database schema initialized"},'
+            '"target":"stealth_core::db"}\n'
+            'HTTP/1.1 200 OK\n'
+            'Content-Length: 52\n'
+            '\n'
+            '{"size": 1, "companies": [{"business-name": "Test AG"}]}'
+        )
         mock_run.return_value = mock_result
 
         result = search_stealth_core("Test AG")

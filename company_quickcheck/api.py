@@ -102,7 +102,8 @@ def address_confidence(row_addr: str, row_plz: str, row_city: str,
 
 
 def search_opendata(name: str, limit: int = 5,
-                    rate_limiter=None) -> Optional[Dict]:
+                    rate_limiter=None,
+                    max_retries: int = 3) -> Optional[Dict]:
     """Search opendata.host for companies.
 
     Args:
@@ -111,46 +112,126 @@ def search_opendata(name: str, limit: int = 5,
         rate_limiter: Optional AdaptiveRateLimiter instance. If provided,
                       wait() is called before the request and the response
                       is recorded afterward for adaptive delay adjustment.
+        max_retries: Maximum retry attempts for transient failures (default 3).
+                      Retries on: RequestException (timeout, DNS, connection reset),
+                      HTTP 502/503/504, and JSON decode errors.
     """
-    try:
-        logger.info(f"Searching opendata for: {name}")
+    retryable_statuses = {502, 503, 504}
+    retryable_exceptions = (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.HTTPError,  # will check status code below
+        requests.exceptions.RequestException,
+    )
 
-        # Adaptive wait before request
-        if rate_limiter is not None:
-            rate_limiter.wait()
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Searching opendata for: {name}" + (f" (attempt {attempt + 1})" if attempt > 0 else ""))
 
-        resp = requests.get(
-            f"{BASE_URL}/registered-companies/find",
-            params={"company-name": name, "limit": limit},
-            auth=(API_KEY, ""),
-            timeout=20,
-        )
+            # Adaptive wait before request
+            if rate_limiter is not None:
+                rate_limiter.wait()
 
-        # Record response for adaptive rate limiting
-        if rate_limiter is not None:
-            rate_limiter.record_response(resp.status_code, dict(resp.headers))
+            resp = requests.get(
+                f"{BASE_URL}/registered-companies/find",
+                params={"company-name": name, "limit": limit},
+                auth=(API_KEY, ""),
+                timeout=20,
+            )
 
-        if resp.status_code == 429:
-            logger.warning("Rate limited (429) — backing off via rate limiter")
+            # Record response for adaptive rate limiting
+            if rate_limiter is not None:
+                rate_limiter.record_response(resp.status_code, dict(resp.headers))
+
+            if resp.status_code == 429:
+                logger.warning("Rate limited (429) — backing off via rate limiter")
+                return None
+            if resp.status_code == 401:
+                logger.error("Invalid API key (401 Unauthorized)")
+                raise PermissionError("Invalid API key (401 Unauthorized)")
+
+            # Retry on proxy/gateway errors (502, 503, 504)
+            if resp.status_code in retryable_statuses:
+                wait_secs = 2 ** attempt
+                logger.warning(
+                    f"Transient HTTP {resp.status_code} on attempt {attempt + 1}/{max_retries} — "
+                    f"retrying in {wait_secs}s"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(wait_secs)
+                    continue
+                else:
+                    logger.error(f"HTTP {resp.status_code} persisted after {max_retries} attempts")
+                    return None
+
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info(f"Opendata search successful: {len(result.get('companies', []))} results")
+            return result
+
+        except PermissionError:
+            raise
+        except requests.exceptions.Timeout as e:
+            wait_secs = 2 ** attempt
+            logger.warning(
+                f"Timeout on attempt {attempt + 1}/{max_retries}: {e}" +
+                (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
+            )
+            if attempt < max_retries - 1:
+                time.sleep(wait_secs)
+                continue
             return None
-        if resp.status_code == 401:
-            logger.error("Invalid API key (401 Unauthorized)")
-            raise PermissionError("Invalid API key (401 Unauthorized)")
-        resp.raise_for_status()
-        result = resp.json()
-        logger.info(f"Opendata search successful: {len(result.get('companies', []))} results")
-        return result
-    except PermissionError:
-        raise
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error in opendata search: {e}")
-        return None
-    except (requests.exceptions.JSONDecodeError, ValueError) as e:
-        logger.error(f"Invalid JSON from opendata API: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error in opendata search: {e}")
-        return None
+        except requests.exceptions.ConnectionError as e:
+            wait_secs = 2 ** attempt
+            logger.warning(
+                f"Connection error on attempt {attempt + 1}/{max_retries}: {e}" +
+                (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
+            )
+            if attempt < max_retries - 1:
+                time.sleep(wait_secs)
+                continue
+            return None
+        except requests.exceptions.HTTPError as e:
+            # raised by raise_for_status() — check if it's a retryable status
+            status_code = getattr(e.response, 'status_code', None)
+            if status_code in retryable_statuses:
+                wait_secs = 2 ** attempt
+                logger.warning(
+                    f"HTTPError {status_code} on attempt {attempt + 1}/{max_retries}" +
+                    (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(wait_secs)
+                    continue
+            # Non-retryable HTTP error (4xx except 401 already raised, 429 handled above)
+            logger.error(f"HTTP error: {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            wait_secs = 2 ** attempt
+            logger.warning(
+                f"Network error on attempt {attempt + 1}/{max_retries}: {e}" +
+                (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
+            )
+            if attempt < max_retries - 1:
+                time.sleep(wait_secs)
+                continue
+            return None
+        except (requests.exceptions.JSONDecodeError, ValueError) as e:
+            wait_secs = 2 ** attempt
+            logger.warning(
+                f"Invalid JSON on attempt {attempt + 1}/{max_retries}: {e}" +
+                (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
+            )
+            if attempt < max_retries - 1:
+                time.sleep(wait_secs)
+                continue
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in opendata search: {e}")
+            return None
+
+    # Should not reach here, but defensive
+    return None
 
 
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
@@ -181,54 +262,40 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
     headers_json = json.dumps({"Authorization": auth_header})
 
-    # Write headers to a restricted temp file to avoid exposing the API key
-    # on the command line (visible in /proc/*/cmdline to other users).
-    hdr_path: Optional[str] = None
-    try:
-        import tempfile
-        hdr_fd, hdr_path = tempfile.mkstemp(suffix=".json", prefix="sc_headers_")
-        os.write(hdr_fd, headers_json.encode())
-        os.close(hdr_fd)
-        os.chmod(hdr_path, 0o600)
-
-        cmd = [
-            "stealth-core",
-            "-c", stealth_config,
-            "fetch",
-            full_url,
-            "--headers-file", hdr_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (AttributeError, TypeError, FileNotFoundError):
-        # stealth-core does not support --headers-file; fall back to --headers
-        logger.warning("stealth-core --headers-file not supported, falling back to --headers")
-        cmd = [
-            "stealth-core",
-            "-c", stealth_config,
-            "fetch",
-            full_url,
-            "--headers", headers_json,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    finally:
-        if hdr_path:
-            try:
-                os.unlink(hdr_path)
-            except OSError:
-                pass
+    # Use --headers (JSON string) to pass auth — stealth-core has no --headers-file
+    cmd = [
+        "stealth-core",
+        "-c", stealth_config,
+        "fetch",
+        full_url,
+        "--custom-headers", headers_json,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
     if result.returncode != 0:
         logger.error(f"Stealth-core error: {result.stderr}")
         return None
 
-    # Parse the stdout to extract JSON body
+    # Parse the stdout to extract JSON body.
+    # stealth-core outputs a tracing line first, then HTTP/1.1 status,
+    # Content-Length, a blank line, then the JSON body.
     output_lines = result.stdout.splitlines()
+
+    # Find the blank line that separates headers from body
     json_start = None
+    blank_line_idx = None
     for i, line in enumerate(output_lines):
-        stripped = line.strip()
-        if stripped.startswith('{') or stripped.startswith('['):
-            json_start = i
+        if line.strip() == '':
+            blank_line_idx = i
             break
+
+    if blank_line_idx is not None:
+        # Search for JSON starting after the blank line
+        for i in range(blank_line_idx + 1, len(output_lines)):
+            stripped = output_lines[i].strip()
+            if stripped.startswith('{') or stripped.startswith('['):
+                json_start = i
+                break
 
     if json_start is None:
         logger.error("No JSON body found in stealth-core output")
