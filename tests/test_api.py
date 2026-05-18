@@ -5,7 +5,7 @@ import os
 import json
 import requests
 import unittest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, call
 from company_quickcheck.api import (
     normalize_address,
     address_confidence,
@@ -168,8 +168,7 @@ class TestSearchOpendata(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(mock_get.call_count, 3)
         # Exponential backoff: 2^0=1s, 2^1=2s
-        mock_sleep.assert_any_call(1)
-        mock_sleep.assert_any_call(2)
+        mock_sleep.assert_has_calls([call(1), call(2)])
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")

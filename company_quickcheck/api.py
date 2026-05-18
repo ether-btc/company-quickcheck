@@ -113,16 +113,11 @@ def search_opendata(name: str, limit: int = 5,
                       wait() is called before the request and the response
                       is recorded afterward for adaptive delay adjustment.
         max_retries: Maximum retry attempts for transient failures (default 3).
-                      Retries on: RequestException (timeout, DNS, connection reset),
-                      HTTP 502/503/504, and JSON decode errors.
+                      Retries on: HTTP 502/503/504, Timeout, ConnectionError,
+                      and generic RequestException. JSON decode errors are
+                      non-retryable (signal server-side data corruption).
     """
     retryable_statuses = {502, 503, 504}
-    retryable_exceptions = (
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.HTTPError,  # will check status code below
-        requests.exceptions.RequestException,
-    )
 
     for attempt in range(max_retries):
         try:
@@ -217,14 +212,9 @@ def search_opendata(name: str, limit: int = 5,
                 continue
             return None
         except (requests.exceptions.JSONDecodeError, ValueError) as e:
-            wait_secs = 2 ** attempt
-            logger.warning(
-                f"Invalid JSON on attempt {attempt + 1}/{max_retries}: {e}" +
-                (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
-            )
-            if attempt < max_retries - 1:
-                time.sleep(wait_secs)
-                continue
+            # Non-retryable — malformed response body from server indicates
+            # server-side data corruption that retrying the same endpoint won't fix.
+            logger.error(f"Invalid JSON from opendata API (non-retryable): {e}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error in opendata search: {e}")
@@ -237,8 +227,8 @@ def search_opendata(name: str, limit: int = 5,
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     """Search using stealth-core as subprocess.
 
-    API credentials are passed via a temporary file (mode 0o600) to avoid
-    exposing them in /proc/*/cmdline.
+    Credentials are passed via --custom-headers JSON on the command line.
+    (stealth-core has no --headers-file option.)
     """
     import json
 
