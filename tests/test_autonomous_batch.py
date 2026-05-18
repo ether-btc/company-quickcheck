@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""Unit tests for autonomous_batch.py (TST-04)."""
+
+import json, os, sys, tempfile, unittest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pandas as pd
+
+# Create a temp directory with needed files and patch constants in the module
+# We do this by patching sys.path + reloading or by using importlib to reload
+
+
+class TestCheckVies(unittest.TestCase):
+    """Tests for check_vies() function."""
+
+    @patch("requests.post")
+    def test_non_atu_returns_not_atu(self, mock_post):
+        """UID not starting with ATU returns valid=False, error='not ATU'."""
+        from autonomous_batch import check_vies
+        result = check_vies("DE123456789")
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["active"])
+        self.assertEqual(result["error"], "not ATU")
+        mock_post.assert_not_called()
+
+    @patch("requests.post")
+    def test_atu_valid_returns_true(self, mock_post):
+        """ATU UID with valid=true response returns valid=True, active=True."""
+        from autonomous_batch import check_vies
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<ns:valid>true</ns:valid><ns:name>Test Company</ns:name><ns:address>Test Address</ns:address>"
+        mock_post.return_value = mock_resp
+
+        result = check_vies("ATU12345678")
+        self.assertTrue(result["valid"])
+        self.assertTrue(result["active"])
+        self.assertEqual(result["name"], "Test Company")
+        self.assertEqual(result["address"], "Test Address")
+        self.assertIsNone(result["error"])
+
+    @patch("requests.post")
+    def test_atu_invalid_returns_false(self, mock_post):
+        """ATU UID with valid=false response returns valid=False, active=False."""
+        from autonomous_batch import check_vies
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "<ns:valid>false</ns:valid>"
+        mock_post.return_value = mock_resp
+
+        result = check_vies("ATU99999999")
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["active"])
+
+    @patch("requests.post")
+    def test_http_error_returns_error_dict(self, mock_post):
+        """Non-200 HTTP response returns error dict with HTTP status."""
+        from autonomous_batch import check_vies
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_post.return_value = mock_resp
+
+        result = check_vies("ATU12345678")
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["active"])
+        self.assertEqual(result["error"], "HTTP 500")
+
+    @patch("requests.post")
+    def test_exception_returns_error_dict(self, mock_post):
+        """Exception during request returns error dict with exception message."""
+        from autonomous_batch import check_vies
+        mock_post.side_effect = Exception("connection timeout")
+
+        result = check_vies("ATU12345678")
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["active"])
+        self.assertEqual(result["error"], "connection timeout")
+
+
+class TestRetryQueueAndCheckpoint(unittest.TestCase):
+    """Tests for retry queue and checkpoint file I/O."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def test_load_retry_queue_missing_file_returns_empty_list(self):
+        """When retry queue file doesn't exist, load_retry_queue returns []."""
+        import autonomous_batch
+        original = autonomous_batch.RETRY_QUEUE_FILE
+        fake_path = str(Path(self.temp_dir) / "nonexistent_queue.json")
+        try:
+            autonomous_batch.RETRY_QUEUE_FILE = fake_path
+            result = autonomous_batch.load_retry_queue()
+            self.assertEqual(result, [])
+        finally:
+            autonomous_batch.RETRY_QUEUE_FILE = original
+
+    def test_save_and_load_retry_queue_round_trip(self):
+        """save_retry_queue + load_retry_queue produces original data."""
+        import autonomous_batch
+        original = autonomous_batch.RETRY_QUEUE_FILE
+        queue_file = str(Path(self.temp_dir) / "retry_queue.json")
+        try:
+            autonomous_batch.RETRY_QUEUE_FILE = queue_file
+            test_queue = [{"idx": 1, "fb": "FN123", "name": "Test GmbH"}]
+            autonomous_batch.save_retry_queue(test_queue)
+            loaded = autonomous_batch.load_retry_queue()
+            self.assertEqual(loaded, test_queue)
+        finally:
+            autonomous_batch.RETRY_QUEUE_FILE = original
+
+    def test_get_checkpoint_missing_returns_defaults(self):
+        """Missing checkpoint file returns default dict with -1 last_idx."""
+        import autonomous_batch
+        original = autonomous_batch.CHECKPOINT_FILE
+        fake_path = str(Path(self.temp_dir) / "nonexistent_checkpoint.json")
+        try:
+            autonomous_batch.CHECKPOINT_FILE = fake_path
+            result = autonomous_batch.get_checkpoint()
+            self.assertEqual(result["last_idx"], -1)
+            self.assertEqual(result["checked"], 0)
+        finally:
+            autonomous_batch.CHECKPOINT_FILE = original
+
+    def test_save_and_get_checkpoint_round_trip(self):
+        """save_checkpoint + get_checkpoint produces saved data."""
+        import autonomous_batch
+        original = autonomous_batch.CHECKPOINT_FILE
+        ckpt_file = str(Path(self.temp_dir) / "checkpoint.json")
+        try:
+            autonomous_batch.CHECKPOINT_FILE = ckpt_file
+            stats = {"checked": 10, "deleted": 2, "active": 5, "not_found": 3, "errors": 0}
+            autonomous_batch.save_checkpoint(5, stats)
+            result = autonomous_batch.get_checkpoint()
+            self.assertEqual(result["last_idx"], 5)
+            self.assertEqual(result["checked"], 10)
+        finally:
+            autonomous_batch.CHECKPOINT_FILE = original
+
+
+class TestLoadEnv(unittest.TestCase):
+    """Tests for load_env() function."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.env_file = Path(self.temp_dir) / ".env"
+
+    def test_load_env_without_file_returns_current_env(self):
+        """When env file doesn't exist, load_env returns current environment vars."""
+        import autonomous_batch
+        original_file = autonomous_batch.ENV_FILE
+        try:
+            autonomous_batch.ENV_FILE = "/nonexistent/.env"
+            result = autonomous_batch.load_env()
+            # Should include PATH at minimum
+            self.assertIn("PATH", result)
+        finally:
+            autonomous_batch.ENV_FILE = original_file
+
+    def test_load_env_with_file_returns_merged_env(self):
+        """Env file values are merged into the returned environment dict."""
+        import autonomous_batch
+        original_file = autonomous_batch.ENV_FILE
+        self.env_file.write_text("TEST_VAR=test_value\nANOTHER=123\n")
+        try:
+            autonomous_batch.ENV_FILE = str(self.env_file)
+            result = autonomous_batch.load_env()
+            self.assertEqual(result["TEST_VAR"], "test_value")
+            self.assertEqual(result["ANOTHER"], "123")
+        finally:
+            autonomous_batch.ENV_FILE = original_file
+
+    def test_load_env_skips_comments_and_empty_lines(self):
+        """Lines starting with # or empty/whitespace-only lines are skipped."""
+        import autonomous_batch
+        original_file = autonomous_batch.ENV_FILE
+        self.env_file.write_text("# comment\n\nKEY=value\n# another comment\n")
+        try:
+            autonomous_batch.ENV_FILE = str(self.env_file)
+            result = autonomous_batch.load_env()
+            self.assertEqual(result["KEY"], "value")
+            self.assertNotIn("# comment", result)
+        finally:
+            autonomous_batch.ENV_FILE = original_file
+
+
+class TestMergeToFinal(unittest.TestCase):
+    """Tests for merge_to_final() function."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def test_merge_updates_geloescht_from_batch(self):
+        """merge_to_final updates GELÖSCHT=NaN/-1 rows using batch lookup."""
+        import autonomous_batch
+
+        original_merged = autonomous_batch.MERGED_FILE
+        original_output = autonomous_batch.OUTPUT_FILE
+        original_final = autonomous_batch.FINAL_OUTPUT
+
+        merged_path = Path(self.temp_dir) / "merged.xlsx"
+        batch_path = Path(self.temp_dir) / "batch.xlsx"
+        output_path = Path(self.temp_dir) / "output.xlsx"
+
+        try:
+            autonomous_batch.MERGED_FILE = str(merged_path)
+            autonomous_batch.OUTPUT_FILE = str(batch_path)
+            autonomous_batch.FINAL_OUTPUT = str(output_path)
+
+            # merged: FN 12345 has GELÖSCHT=NA, FN 67890 has GELÖSCHT=0
+            merged_df = pd.DataFrame({
+                "Firmenbuchnr": ["FN 12345", "FN 67890"],
+                "Firmenname": ["Alpha GmbH", "Beta AG"],
+                "GELÖSCHT": [pd.NA, 0],
+            })
+            merged_df.to_excel(merged_path, index=False)
+
+            # batch: FN 12345 (→ 12345) has GELÖSCHT=1, FN 99999 has GELÖSCHT=0
+            batch_df = pd.DataFrame({
+                "Firmenbuchnr": ["FN 12345", "FN 99999"],
+                "Firmenname": ["Alpha GmbH", "Gamma OG"],
+                "GELÖSCHT": [1, 0],
+            })
+            batch_df.to_excel(batch_path, index=False)
+
+            autonomous_batch.merge_to_final()
+
+            result = pd.read_excel(output_path)
+            alpha = result[result["Firmenbuchnr"] == "FN 12345"].iloc[0]["GELÖSCHT"]
+            beta = result[result["Firmenbuchnr"] == "FN 67890"].iloc[0]["GELÖSCHT"]
+            # Alpha: NA → 1 (updated from batch)
+            self.assertEqual(alpha, 1)
+            # Beta: 0 stays 0 (batch lookup matched but original was already set to valid 0)
+            self.assertEqual(beta, 0)
+        finally:
+            autonomous_batch.MERGED_FILE = original_merged
+            autonomous_batch.OUTPUT_FILE = original_output
+            autonomous_batch.FINAL_OUTPUT = original_final
+
+
+if __name__ == "__main__":
+    unittest.main()
