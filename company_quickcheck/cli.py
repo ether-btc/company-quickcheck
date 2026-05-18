@@ -11,29 +11,46 @@ from . import __version__
 logger = logging.getLogger(__name__)
 
 
+def _ensure_logging() -> None:
+    """Lazily configure the cli logger to output to stdout (idempotent per-call).
+
+    Removes any stale handlers that may have been added in previous test runs
+    or previous invocations, ensuring the handler always points to the current
+    sys.stdout (important when sys.stdout is redirected by context managers).
+    """
+    for _ in range(len(logger.handlers)):
+        logger.removeHandler(logger.handlers[0])
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
 def check_company(args: argparse.Namespace) -> None:
     """Check a single company and print the result."""
+    _ensure_logging()
     name = args.name
     use_stealth = args.stealth
     result = search_company(name, limit=5, use_stealth=use_stealth)
     if result is None:
-        logger.error(f"Could not fetch data for %s", name)
+        logger.error("Could not fetch data for %s", name)
         sys.exit(1)
     if result.get("companies"):
         company = result["companies"][0]
         deleted = is_deleted(company)
         status = "GELÖSCHT" if deleted else "aktiv"
-        logger.info(f"%s: %s", name, status)
-        logger.info(f"  Firma: %s", company.get('business-name', '?'))
-        logger.info(f"  FB-Nr: %s", company.get('reg-no', '?'))
-        logger.info(f"  Status: %s", company.get('reg-status', '?'))
-        logger.info(f"  Adresse: %s %s, %s %s",
-            company.get('business-address', {}).get('street-address', '?'),
-            company.get('business-address', {}).get('street-number', '?'),
-            company.get('business-address', {}).get('postal-code', '?'),
-            company.get('business-address', {}).get('city', '?'))
+        logger.info("%s: %s", name, status)
+        logger.info("  Firma: %s", company.get("business-name", "?"))
+        logger.info("  FB-Nr: %s", company.get("reg-no", "?"))
+        logger.info("  Status: %s", company.get("reg-status", "?"))
+        logger.info("  Adresse: %s %s, %s %s",
+            company.get("business-address", {}).get("street-address", "?"),
+            company.get("business-address", {}).get("street-number", "?"),
+            company.get("business-address", {}).get("postal-code", "?"),
+            company.get("business-address", {}).get("city", "?"))
     else:
-        logger.info(f"%s: nicht gefunden (-1)", name)
+        logger.info("%s: nicht gefunden (-1)", name)
 
 
 def batch_process(args: argparse.Namespace) -> None:

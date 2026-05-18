@@ -39,14 +39,14 @@ class TestCLI(unittest.TestCase):
         }
         mock_search.return_value = mock_response
 
-        # Capture stdout
         import io
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stdout, redirect_stderr
 
-        f = io.StringIO()
-        with redirect_stdout(f):
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             check_company(argparse.Namespace(name="Wienerberger AG", stealth=False))
-        output = f.getvalue()
+        output = out.getvalue() + err.getvalue()
 
         self.assertIn("Wienerberger AG: aktiv", output)
         self.assertIn("FB-Nr: 77676f", output)
@@ -63,12 +63,13 @@ class TestCLI(unittest.TestCase):
         mock_search.return_value = mock_response
 
         import io
-        from contextlib import redirect_stdout
+        from contextlib import redirect_stdout, redirect_stderr
 
-        f = io.StringIO()
-        with redirect_stdout(f):
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             check_company(argparse.Namespace(name="Unknown GmbH", stealth=False))
-        output = f.getvalue()
+        output = out.getvalue() + err.getvalue()
 
         self.assertIn("Unknown GmbH: nicht gefunden (-1)", output)
 
