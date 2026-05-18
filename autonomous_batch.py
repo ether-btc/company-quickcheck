@@ -8,11 +8,6 @@ Designed for overnight autonomous run.
 import json, logging, os, sys, time, signal
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stdout
-)
 logger = logging.getLogger(__name__)
 
 PROJECT_DIR = "/home/hermes-pi/company-quickcheck"

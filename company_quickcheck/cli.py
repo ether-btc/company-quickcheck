@@ -2,10 +2,13 @@
 """Command-line interface for company-quickcheck."""
 
 import argparse
+import logging
 import sys
 from .core import process_batch
 from .api import search_company, is_deleted, format_company
 from . import __version__
+
+logger = logging.getLogger(__name__)
 
 
 def check_company(args: argparse.Namespace) -> None:
@@ -14,19 +17,23 @@ def check_company(args: argparse.Namespace) -> None:
     use_stealth = args.stealth
     result = search_company(name, limit=5, use_stealth=use_stealth)
     if result is None:
-        print(f"Error: Could not fetch data for {name}")
+        logger.error(f"Could not fetch data for %s", name)
         sys.exit(1)
     if result.get("companies"):
         company = result["companies"][0]
         deleted = is_deleted(company)
         status = "GELÖSCHT" if deleted else "aktiv"
-        print(f"{name}: {status}")
-        print(f"  Firma: {company.get('business-name', '?')}")
-        print(f"  FB-Nr: {company.get('reg-no', '?')}")
-        print(f"  Status: {company.get('reg-status', '?')}")
-        print(f"  Adresse: {company.get('business-address', {}).get('street-address', '?')} {company.get('business-address', {}).get('street-number', '?')}, {company.get('business-address', {}).get('postal-code', '?')} {company.get('business-address', {}).get('city', '?')}")
+        logger.info(f"%s: %s", name, status)
+        logger.info(f"  Firma: %s", company.get('business-name', '?'))
+        logger.info(f"  FB-Nr: %s", company.get('reg-no', '?'))
+        logger.info(f"  Status: %s", company.get('reg-status', '?'))
+        logger.info(f"  Adresse: %s %s, %s %s",
+            company.get('business-address', {}).get('street-address', '?'),
+            company.get('business-address', {}).get('street-number', '?'),
+            company.get('business-address', {}).get('postal-code', '?'),
+            company.get('business-address', {}).get('city', '?'))
     else:
-        print(f"{name}: nicht gefunden (-1)")
+        logger.info(f"%s: nicht gefunden (-1)", name)
 
 
 def batch_process(args: argparse.Namespace) -> None:
