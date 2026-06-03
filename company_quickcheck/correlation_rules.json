@@ -57,7 +57,7 @@
       },
       "city_aliases": {
         "mnk": "münchendorf",
-        "wien": "vienna"
+        "vienna": "wien"
       },
       "street_abbreviations": {
         "str.": "strasse",

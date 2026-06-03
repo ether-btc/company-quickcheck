@@ -5,6 +5,10 @@ import json, os, sys, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+# Ensure the project root is on sys.path so the standalone script
+# (autonomous_batch.py) is importable as a top-level module.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pandas as pd
 
 # Create a temp directory with needed files and patch constants in the module

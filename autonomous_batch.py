@@ -24,6 +24,20 @@ MERGED_FILE = "/srv/sync/Unternehmen_merged.xlsx"
 CHECKPOINT_EVERY = 25
 REQUEST_TIMEOUT = 6  # seconds — fast fail on 429
 
+# ── Graceful Shutdown ────────────────────────────────────────────────────────
+
+_SHUTDOWN_REQUESTED = False
+
+def _signal_handler(signum, frame):
+    global _SHUTDOWN_REQUESTED
+    sig_name = signal.Signals(signum).name
+    logger.warning(f"Received {sig_name} — will finish current row and checkpoint before exiting")
+    _SHUTDOWN_REQUESTED = True
+
+def _install_signal_handlers():
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
 # Load env
 def load_env():
     env = os.environ.copy()
@@ -144,6 +158,15 @@ def run_phase1():
         row_idx = df.index.get_loc(idx)
         if row_idx < start_idx:
             continue
+
+        # Respond to SIGTERM/SIGINT gracefully
+        if _SHUTDOWN_REQUESTED:
+            logger.warning(f"[SHUTDOWN] Interrupted at row {row_idx} — checkpointing and exiting")
+            save_checkpoint(int(row_idx), stats)
+            df.to_excel(OUTPUT_FILE, index=False)
+            save_retry_queue(retry_queue)
+            logger.info("Graceful shutdown complete")
+            return retry_queue
 
         firmenname = str(row.get("Firmenname", "")).strip()
         firmenbuchnr = str(row.get("Firmenbuchnr", "")).strip()
@@ -389,6 +412,7 @@ def merge_to_final():
 def main():
     logger.info("Starting autonomous batch run")
     logger.info("PID: " + str(os.getpid()))
+    _install_signal_handlers()
 
     # Phase 1: fast API batch
     retry_queue = run_phase1()

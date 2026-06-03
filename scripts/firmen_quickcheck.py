@@ -23,6 +23,8 @@ import sys
 import time
 import json
 import argparse
+from typing import Dict, List, Optional
+
 import pandas as pd
 import requests
 
@@ -35,7 +37,7 @@ if not API_KEY:
 BASE_URL = "https://api.opendata.host/1.0"
 
 
-def search_company(name: str, limit: int = 5) -> dict | None:
+def search_company(name: str, limit: int = 5) -> Optional[Dict]:
     """Search opendata.host for Austrian companies."""
     try:
         resp = requests.get(

@@ -45,6 +45,13 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
 
+    # Prevent same-file destruction
+    if input_path.resolve() == Path(output_file).resolve():
+        raise ValueError(
+            f"Input and output files resolve to the same path ({output_file}). "
+            "This would overwrite the input. Use different filenames."
+        )
+
     # Disk space check — prevent corrupt Excel writes when disk is full
     # Skip when running tests or explicitly overridden
     # Tests can set os.environ["COMPANY_QUICKCHECK_RUN_DISK_CHECK"]="1" to force the check
@@ -266,7 +273,9 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
                 with open(output_file + ".checkpoint.json", "w") as f:
                     json.dump({"last_idx": idx, **stats}, f)
             except OSError as e:
+                # Checkpoint failure is fatal — we cannot resume safely
                 logger.error(f"  [checkpoint] Failed to write checkpoint: {e}")
+                raise RuntimeError(f"FATAL: Checkpoint write failed ({e}). Stopping to prevent corrupt resume state.") from e
             # Then save Excel (no timeout here — final save is more important)
             df.to_excel(output_file, index=False)
             logger.info(f"  [checkpoint {idx+1}/{total}]")

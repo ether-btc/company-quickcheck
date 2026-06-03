@@ -43,9 +43,11 @@ def normalize_address(addr: str, country: str = "AT") -> str:
     if country == "AT" or country == "DE":  # German-speaking countries
         # Umlauts
         addr = addr.replace("ü", "ue").replace("ä", "ae").replace("ö", "oe").replace("ß", "ss")
-        # Common abbreviations
-        # Match "str." or "str" at the end of a word (before a word boundary)
+        # Common abbreviations (strasse, gasse, platz, allee, weg)
         addr = re.sub(r"str\.?(?=\b)", "strasse", addr)
+        addr = re.sub(r"\bg\.(?=\b)", "gasse", addr)
+        addr = re.sub(r"\bpl\.(?=\b)", "platz", addr)
+        addr = re.sub(r"\bav\.(?=\b)", "allee", addr)
 
     # Remove punctuation, extra spaces (common to all countries)
     addr = re.sub(r"[^\w\s]", "", addr)
@@ -372,8 +374,6 @@ def search_with_correlation(name: str,
         fb_input=fb_input,
         uid_input=uid_input,
         address_fields=address_fields,
-        mode=mode,
-        min_confidence=min_confidence,
     )
 
     return result.company, result
