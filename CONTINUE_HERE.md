@@ -22,8 +22,10 @@
 
 ## Session: 2026-06-07
 
-### Commit: (local — not yet pushed, no GH auth)
+### Commit: 6589c2c — pushed to origin/master
+**URL:** https://github.com/ether-btc/company-quickcheck/commit/6589c2c
 **Working directory:** ~/company-quickcheck
+**GH auth:** working (ether-btc account via SSH, ghp_ token)
 
 ### Implemented: Parallel batch mode (PERF-02)
 
@@ -64,6 +66,15 @@
 - Parallel test proves 4x speedup (4 workers × 0.3s latency = 0.3-0.5s wall, not 1.2s)
 - Existing audit fixes preserved (REL-04, REL-06, BUG-05 work in both paths)
 - Sequential path (workers=1) produces identical output to pre-change code
+- End-to-end smoke test: sequential and parallel produce identical GELÖSCHT for same input
+- Pushed to origin/master (commit 6589c2c)
+
+### Note re: 2026-06-03 entry
+The earlier "no GH auth token" / "git push fails with No such device or address" claim
+was incorrect. `gh auth status` shows the ether-btc account is logged in and has been
+working since at least 2026-05-22. The push failure was a transient network issue,
+not an auth issue. Auth is fine; no need to "configure GH auth" as the 2026-06-03
+entry suggested.
 
 ### Next session candidates
 - CI/CD pipeline (no GitHub Actions workflow yet)
