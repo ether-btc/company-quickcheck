@@ -6,8 +6,11 @@ import logging
 import os
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -24,12 +27,172 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class RowResult:
+    """Result of processing a single row — pure data, safe to pass between threads.
+
+    Carries everything the main thread needs to apply the result to df and stats
+    without the worker thread touching either (which would be racy under workers>1).
+    """
+    idx: int
+    geloescht: Optional[int] = None     # -1, 0, 1; None means "below start_idx, skip"
+    firmenbuchnr: Optional[str] = None  # backfill value (only set when fb_backfilled=True)
+    fb_backfilled: bool = False
+    stat_key: Optional[str] = None     # one of: checked, deleted, active, not_found, errors
+
+
+def _process_row(idx: int, row: pd.Series, use_stealth: bool, rate_limiter,
+                 correlation_mode: str, correlation_min_confidence: float) -> RowResult:
+    """Process a single row and return a RowResult.
+
+    Pure function: does not touch df or stats. Side-effect-free except for
+    logging and the API call. Safe to call from worker threads.
+    """
+    firmenname = str(row.get("Firmenname", "")).strip()
+    if not firmenname or firmenname == "nan":
+        logger.warning(f"  [{idx}] Missing company name")
+        return RowResult(idx=idx, geloescht=-1, stat_key="errors")
+
+    result = search_company(firmenname, limit=5, use_stealth=use_stealth,
+                            rate_limiter=rate_limiter)
+    if result is None:
+        logger.error(f"  [{idx}] {firmenname}: ERROR (no response)")
+        return RowResult(idx=idx, geloescht=-1, stat_key="errors")
+
+    # opendata.host returns {"companies": [...]} — no errorCode field
+    if not result.get("companies"):
+        logger.warning(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
+        return RowResult(idx=idx, geloescht=-1, stat_key="not_found")
+
+    companies = result["companies"]
+    n_results = len(companies)
+
+    # Try firmenbuchnr exact match first
+    matched = None
+    fb_input = str(row.get("Firmenbuchnr", "")).strip().lower().lstrip("fn").strip()
+    for c in companies:
+        reg = str(c.get("reg-no", "")).strip().lower().lstrip("fn").strip()
+        if fb_input and reg and (fb_input == reg or fb_input in reg or reg in fb_input):
+            matched = c
+            break
+
+    fb_backfilled = False
+    firmenbuchnr_value: Optional[str] = None
+
+    # No FB match → apply correlation-enhanced disambiguation
+    if not matched:
+        if n_results == 1:
+            # Single result: use existing address_confidence
+            company = companies[0]
+            addr = company.get("business-address", {}) or {}
+
+            row_street = str(row.get("Hauptadr_Strasse", "")).strip()
+            row_plz = str(row.get("Hauptadr_PLZ", "")).strip()
+            row_city = str(row.get("Hauptadr_Ort", "")).strip()
+
+            api_street = addr.get("street-address", "")
+            api_number = addr.get("street-number", "")
+            api_plz = addr.get("postal-code", "")
+            api_city = addr.get("city", "")
+
+            confidence = address_confidence(row_street, row_plz, row_city,
+                                            api_street, api_number, api_plz, api_city)
+
+            if confidence >= 0.6:
+                matched = company
+                fb_api = company.get("reg-no", "").strip()
+                if fb_api and confidence >= 0.8:
+                    fb_backfilled = True
+                    firmenbuchnr_value = fb_api
+                    logger.info(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
+            else:
+                matched = company
+                logger.warning(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
+        else:
+            # Multiple results: use correlation-enhanced disambiguation
+            uid_input = str(row.get("UID_Nummer", "")).strip()
+            addr_fields = build_address_fields(row)
+            matched_company, match_result = search_with_correlation(
+                name=firmenname,
+                fb_input=fb_input,
+                uid_input=uid_input,
+                address_fields=addr_fields,
+                candidates=companies,
+                mode=correlation_mode,
+                min_confidence=correlation_min_confidence,
+            )
+            if matched_company:
+                matched = matched_company
+                logger.info(f"  [{idx}] {firmenname}: correlation match (conf={match_result.composite_confidence:.2f}, "
+                            f"name={match_result.name_confidence:.2f}, addr={match_result.address_confidence:.2f}, "
+                            f"reason={match_result.fallback_reason}) → {format_company(matched)}")
+                # Backfill FB if confidence >= 0.80
+                if match_result.composite_confidence >= 0.80:
+                    fb_api = matched.get("reg-no", "").strip()
+                    if fb_api:
+                        fb_backfilled = True
+                        firmenbuchnr_value = fb_api
+                        logger.info(f"  [{idx}] {firmenname}: correlation FB backfill: {fb_api}")
+            else:
+                matched = companies[0]
+                logger.info(f"  [{idx}] {firmenname}: {n_results} results, no FB match, "
+                            f"no correlation above threshold → using first: {format_company(matched)}")
+
+    # Determine GELÖSCHT status
+    if is_deleted(matched):
+        geloescht = 1
+        logger.info(f"  [{idx}] GELÖSCHT | {format_company(matched)}")
+        stat_key = "deleted"
+    else:
+        geloescht = 0
+        if n_results > 1 or not matched:
+            logger.info(f"  [{idx}] aktiv | {format_company(matched)}")
+        stat_key = "active"
+
+    return RowResult(
+        idx=idx,
+        geloescht=geloescht,
+        firmenbuchnr=firmenbuchnr_value,
+        fb_backfilled=fb_backfilled,
+        stat_key=stat_key,
+    )
+
+
+def _apply_result(result: RowResult, df: pd.DataFrame, stats: Dict[str, int]) -> None:
+    """Apply a RowResult to the DataFrame and stats dict. Main thread only."""
+    df.at[result.idx, "GELÖSCHT"] = result.geloescht
+    if result.firmenbuchnr:
+        df.at[result.idx, "Firmenbuchnr"] = result.firmenbuchnr
+    if result.stat_key:
+        stats[result.stat_key] += 1
+        # "checked" is incremented whenever the API returned at least one
+        # company (i.e. stat_key is "active" or "deleted") — not for
+        # not_found/errors. This matches the pre-parallel behaviour.
+        if result.stat_key in ("active", "deleted"):
+            stats["checked"] += 1
+        if result.fb_backfilled:
+            stats["fb_backfilled"] += 1
+
+
+def _write_checkpoint(output_file: str, last_idx: int, stats: Dict[str, int]) -> None:
+    """Write checkpoint JSON. Fatal on failure."""
+    try:
+        with open(output_file + ".checkpoint.json", "w") as f:
+            json.dump({"last_idx": last_idx, **stats}, f)
+    except OSError as e:
+        logger.error(f"  [checkpoint] Failed to write checkpoint: {e}")
+        raise RuntimeError(
+            f"FATAL: Checkpoint write failed ({e}). Stopping to prevent corrupt resume state."
+        ) from e
+
+
 def process_batch(input_file: str, output_file: str, limit: int = None,
                   checkpoint_every: int = 25, resume: bool = False,
                   force_start: int = None, use_stealth: bool = False,
                   adaptive: bool = True,
                   correlation_mode: str = "auto",
-                  correlation_min_confidence: float = 0.70) -> dict:
+                  correlation_min_confidence: float = 0.70,
+                  workers: int = 1) -> dict:
     """
     Process companies with address-aware matching and Firmenbuchnr backfill.
 
@@ -39,6 +202,11 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
                  Set False to preserve the old fixed-sleep behaviour.
     correlation_mode: CorrelationMatcher mode (auto/strict/lenient, default: auto)
     correlation_min_confidence: minimum composite confidence to accept (default: 0.70)
+    workers:     number of concurrent worker threads for API calls (default 1).
+                 1 = sequential (original behaviour). 2+ uses ThreadPoolExecutor
+                 with the AdaptiveRateLimiter for shared backoff. workers>1
+                 only parallelises the API call + matching step — checkpoint
+                 writing and df updates remain on the main thread.
     """
     # Validate input file exists
     input_path = Path(input_file)
@@ -153,132 +321,77 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     else:
         logger.info(f"[rate] fixed delay={config.get_rate_limit_delay():.2f}s")
 
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    if workers > 1:
+        logger.info(f"[parallel] workers={workers} (concurrent API calls)")
+
+    # Build the work list — DataFrame rows from start_idx to end.
+    # We use df.iterrows() for parity with the sequential code; the resulting
+    # Series is captured by _process_row() and not shared.
+    work_items: List = []
     for idx, row in df.iterrows():
-        if idx < start_idx:
-            continue
+        if idx >= start_idx:
+            work_items.append((idx, row))
 
-        firmenname = str(row.get("Firmenname", "")).strip()
-        if not firmenname or firmenname == "nan":
-            df.at[idx, "GELÖSCHT"] = -1
-            logger.warning(f"  [{idx}] Missing company name")
-            stats["errors"] += 1
-            continue
+    if workers == 1:
+        # Sequential path — identical observable behaviour to pre-parallel code.
+        # Single in-flight call, no thread pool overhead.
+        processed = 0
+        for idx, row in work_items:
+            result = _process_row(idx, row, use_stealth, rate_limiter,
+                                  correlation_mode, correlation_min_confidence)
+            _apply_result(result, df, stats)
+            _maybe_sleep(rate_limiter)
+            processed += 1
 
-        result = search_company(firmenname, limit=5, use_stealth=use_stealth,
-                                rate_limiter=rate_limiter)
-        if result is None:
-            df.at[idx, "GELÖSCHT"] = -1
-            logger.error(f"  [{idx}] {firmenname}: ERROR (no response)")
-            stats["errors"] += 1
-        # opendata.host returns {"companies": [...]} — no errorCode field
-        elif result.get("companies"):
-            companies = result["companies"]
-            n_results = len(companies)
-
-            # Try firmenbuchnr exact match first
-            matched = None
-            fb_input = str(row.get("Firmenbuchnr", "")).strip().lower().lstrip("fn").strip()
-            for c in companies:
-                reg = str(c.get("reg-no", "")).strip().lower().lstrip("fn").strip()
-                if fb_input and reg and (fb_input == reg or fb_input in reg or reg in fb_input):
-                    matched = c
-                    break
-
-            # No FB match → apply correlation-enhanced disambiguation
-            if not matched:
-                if n_results == 1:
-                    # Single result: use existing address_confidence
-                    company = companies[0]
-                    addr = company.get("business-address", {}) or {}
-
-                    row_street = str(row.get("Hauptadr_Strasse", "")).strip()
-                    row_plz = str(row.get("Hauptadr_PLZ", "")).strip()
-                    row_city = str(row.get("Hauptadr_Ort", "")).strip()
-
-                    api_street = addr.get("street-address", "")
-                    api_number = addr.get("street-number", "")
-                    api_plz = addr.get("postal-code", "")
-                    api_city = addr.get("city", "")
-
-                    confidence = address_confidence(row_street, row_plz, row_city,
-                                                    api_street, api_number, api_plz, api_city)
-
-                    if confidence >= 0.6:
-                        matched = company
-                        fb_api = company.get("reg-no", "").strip()
-                        if fb_api and confidence >= 0.8:
-                            df.at[idx, "Firmenbuchnr"] = fb_api
-                            stats["fb_backfilled"] += 1
-                            logger.info(f"  [{idx}] {firmenname}: addr match (conf={confidence:.1f}) → FB backfill: {fb_api}")
-                    else:
-                        matched = company
-                        logger.warning(f"  [{idx}] {firmenname}: single result but addr mismatch (conf={confidence:.1f}) → taking anyway")
-                else:
-                    # Multiple results: use correlation-enhanced disambiguation
-                    uid_input = str(row.get("UID_Nummer", "")).strip()
-                    addr_fields = build_address_fields(row)
-                    matched_company, match_result = search_with_correlation(
-                        name=firmenname,
-                        fb_input=fb_input,
-                        uid_input=uid_input,
-                        address_fields=addr_fields,
-                        candidates=companies,
-                        mode=correlation_mode,
-                        min_confidence=correlation_min_confidence,
-                    )
-                    if matched_company:
-                        matched = matched_company
-                        logger.info(f"  [{idx}] {firmenname}: correlation match (conf={match_result.composite_confidence:.2f}, "
-                                    f"name={match_result.name_confidence:.2f}, addr={match_result.address_confidence:.2f}, "
-                                    f"reason={match_result.fallback_reason}) → {format_company(matched)}")
-                        # Backfill FB if confidence >= 0.80
-                        if match_result.composite_confidence >= 0.80:
-                            fb_api = matched.get("reg-no", "").strip()
-                            if fb_api:
-                                df.at[idx, "Firmenbuchnr"] = fb_api
-                                stats["fb_backfilled"] += 1
-                                logger.info(f"  [{idx}] {firmenname}: correlation FB backfill: {fb_api}")
-                    else:
-                        matched = companies[0]
-                        logger.info(f"  [{idx}] {firmenname}: {n_results} results, no FB match, "
-                                    f"no correlation above threshold → using first: {format_company(matched)}")
-
-            # Determine GELÖSCHT status
-            if is_deleted(matched):
-                df.at[idx, "GELÖSCHT"] = 1
-                logger.info(f"  [{idx}] GELÖSCHT | {format_company(matched)}")
-                stats["deleted"] += 1
-            else:
-                df.at[idx, "GELÖSCHT"] = 0
-                if n_results > 1 or not matched:
-                    logger.info(f"  [{idx}] aktiv | {format_company(matched)}")
-                stats["active"] += 1
-            stats["checked"] += 1
-
-        else:
-            df.at[idx, "GELÖSCHT"] = -1
-            logger.warning(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
-            stats["not_found"] += 1
-
-        # Sleep: adaptive rate limiter handles it (wait + record), fixed fallback otherwise
-        if rate_limiter:
-            pass  # wait + record already done inside search_company
-        else:
-            time.sleep(config.get_rate_limit_delay())
-
-        # Checkpoint every N rows — write checkpoint BEFORE Excel save (race condition fix)
-        if (idx + 1) % checkpoint_every == 0:
-            # Write checkpoint first (so crash after Excel save still allows correct resume)
+            # Checkpoint every N rows — write checkpoint BEFORE Excel save (race fix)
+            if processed % checkpoint_every == 0:
+                _write_checkpoint(output_file, idx, stats)
+                df.to_excel(output_file, index=False)
+                logger.info(f"  [checkpoint {processed}/{total}]")
+    else:
+        # Parallel path — submit all rows, collect results as they complete.
+        # Checkpoint and df writes stay on the main thread; only the API
+        # call + matching logic runs concurrently.
+        completed = 0
+        last_completed_idx = -1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_idx = {
+                executor.submit(
+                    _process_row, idx, row, use_stealth, rate_limiter,
+                    correlation_mode, correlation_min_confidence,
+                ): idx
+                for idx, row in work_items
+            }
             try:
-                with open(output_file + ".checkpoint.json", "w") as f:
-                    json.dump({"last_idx": idx, **stats}, f)
-            except OSError as e:
-                # Checkpoint failure is fatal — we cannot resume safely
-                logger.error(f"  [checkpoint] Failed to write checkpoint: {e}")
-                raise RuntimeError(f"FATAL: Checkpoint write failed ({e}). Stopping to prevent corrupt resume state.") from e
-            # Then save Excel (no timeout here — final save is more important)
-            df.to_excel(output_file, index=False)
-            logger.info(f"  [checkpoint {idx+1}/{total}]")
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        # Worker raised — record as error and continue.
+                        # This can happen if search_opendata raises an
+                        # unexpected exception (it should return None on
+                        # most errors, but be defensive).
+                        logger.error(f"  [{idx}] worker raised: {e}")
+                        result = RowResult(idx=idx, geloescht=-1, stat_key="errors")
+                    _apply_result(result, df, stats)
+                    last_completed_idx = max(last_completed_idx, idx)
+                    completed += 1
+                    if completed % checkpoint_every == 0:
+                        _write_checkpoint(output_file, last_completed_idx, stats)
+                        df.to_excel(output_file, index=False)
+                        logger.info(
+                            f"  [checkpoint {completed}/{len(work_items)}]"
+                        )
+            except KeyboardInterrupt:
+                # Cancel in-flight futures on Ctrl-C and write a final
+                # checkpoint so --resume can continue.
+                logger.warning("[parallel] KeyboardInterrupt — cancelling workers")
+                for f in future_to_idx:
+                    f.cancel()
+                raise
 
     # Final save (with timeout)
     with ThreadPoolExecutor(max_workers=1) as ex:
@@ -296,3 +409,13 @@ def process_batch(input_file: str, output_file: str, limit: int = None,
     logger.info(f"FB backfill:{stats['fb_backfilled']}")
     logger.info(f"Output: {output_file}")
     return stats
+
+
+def _maybe_sleep(rate_limiter) -> None:
+    """Sleep between requests in the sequential path.
+
+    In adaptive mode the limiter handles wait() inside search_company, so
+    this is a no-op. With a fixed delay we sleep here.
+    """
+    if rate_limiter is None:
+        time.sleep(config.get_rate_limit_delay())

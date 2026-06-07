@@ -91,10 +91,30 @@ class TestCLI(unittest.TestCase):
             no_adaptive=False,
             correlation_mode="auto",
             correlation_min_confidence=0.70,
+            workers=1,
         ))
 
         self.assertIsNone(result)
         self.assertTrue(mock_process.called)
+        # workers=1 should be passed through
+        self.assertEqual(mock_process.call_args.kwargs["workers"], 1)
+
+    @patch("company_quickcheck.cli.process_batch")
+    @patch("sys.exit")
+    def test_batch_process_workers_passed_through(self, mock_exit, mock_process):
+        """--workers N must reach process_batch unchanged."""
+        mock_process.return_value = {"checked": 0}
+        mock_exit.return_value = None
+
+        batch_process(argparse.Namespace(
+            input_file="in.xlsx", output_file="out.xlsx",
+            limit=None, stealth=False, checkpoint_every=25,
+            resume=False, force_start=None, no_adaptive=False,
+            correlation_mode="auto", correlation_min_confidence=0.70,
+            workers=4,
+        ))
+
+        self.assertEqual(mock_process.call_args.kwargs["workers"], 4)
 
 
 if __name__ == "__main__":

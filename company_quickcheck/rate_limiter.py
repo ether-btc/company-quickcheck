@@ -7,10 +7,15 @@ Replaces fixed sleep with:
   - Adaptive tracking via response headers (X-RateLimit-Remaining, Retry-After)
   - Minimum delay floor so we never hammer a struggling server
   - Configurable via config.yaml (adaptive_rate_limit.* keys)
+  - Thread-safe: multiple worker threads can share a single limiter
+    (state mutations are protected by an internal lock; ``wait()``
+    reads the current delay once and sleeps outside the lock so workers
+    don't serialise on each other)
 """
 
-import time
 import logging
+import threading
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -43,16 +48,30 @@ class AdaptiveRateLimiter:
 
         self._current_delay = initial_delay
         self._consecutive_errors = 0
+        # Lock protecting _current_delay and _consecutive_errors so that
+        # concurrent workers (--workers > 1) get a consistent view of state.
+        # ``wait()`` reads the delay once under the lock and sleeps outside
+        # so workers don't serialise on each other.
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        """Sleep for the current adaptive delay."""
-        if self._current_delay > 0:
-            logger.debug(f"[rate] sleeping {self._current_delay:.2f}s")
-            time.sleep(self._current_delay)
+        """Sleep for the current adaptive delay.
+
+        Thread-safe: reads the current delay under the lock, then sleeps
+        outside the lock so concurrent workers don't block each other.
+        """
+        with self._lock:
+            delay = self._current_delay
+        if delay > 0:
+            logger.debug(f"[rate] sleeping {delay:.2f}s")
+            time.sleep(delay)
 
     def record_response(self, status_code: int, headers: Optional[dict] = None) -> None:
         """
         Update delay based on server response.
+
+        Thread-safe: read-modify-write of ``_current_delay`` and
+        ``_consecutive_errors`` is protected by an internal lock.
 
         Args:
             status_code: HTTP status code of the response
@@ -60,6 +79,11 @@ class AdaptiveRateLimiter:
         """
         headers = headers or {}
 
+        with self._lock:
+            self._record_response_locked(status_code, headers)
+
+    def _record_response_locked(self, status_code: int, headers: dict) -> None:
+        """Internal: caller must already hold ``self._lock``."""
         if status_code == 429:
             # Honour server's Retry-After if present, else apply backoff
             retry_after = headers.get("Retry-After")
@@ -104,9 +128,13 @@ class AdaptiveRateLimiter:
         return self._current_delay
 
     def reset(self) -> None:
-        """Reset to initial delay. Use when starting a new batch."""
-        self._current_delay = self.initial_delay
-        self._consecutive_errors = 0
+        """Reset to initial delay. Use when starting a new batch.
+
+        Thread-safe: state mutations are protected by the internal lock.
+        """
+        with self._lock:
+            self._current_delay = self.initial_delay
+            self._consecutive_errors = 0
 
     def __repr__(self) -> str:
         return (

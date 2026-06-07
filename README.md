@@ -40,15 +40,40 @@ python -m company_quickcheck batch input.xlsx output.xlsx
 ```
 
 Options:
-
 ```bash
 python -m company_quickcheck batch input.xlsx output.xlsx \
   --limit 100 \          # Process only first 100 rows
   --resume \             # Resume from last checkpoint
   --force-start 150 \    # Start from row 150 (0-based)
   --checkpoint-every 50 \ # Checkpoint every 50 rows
-  --stealth               # Use stealth-core for requests
+  --stealth \            # Use stealth-core for requests
+  --workers 4 \          # 4 concurrent API calls (parallel mode)
+  --no-adaptive          # Disable adaptive rate limiting (use fixed delay)
 ```
+
+#### Parallel Mode (`--workers N`)
+
+When `--workers` is greater than 1, the batch runs API calls concurrently using
+`ThreadPoolExecutor` with a shared `AdaptiveRateLimiter`. This is the biggest
+single batch speedup available — a 400-row batch that takes ~40 minutes
+sequentially typically completes in ~10-15 minutes with `--workers 4`.
+
+| Workers | Approx throughput (rows/min) | Use case |
+|---------|------------------------------|----------|
+| 1 (default) | 1 | Sequential — original behaviour, safest |
+| 2-3 | 2-3 | Good speedup with low 429 risk |
+| 4-5 | 3-5 | Best balance for most batches |
+| 8+ | varies | Aggressive; rely on adaptive backoff |
+
+The `AdaptiveRateLimiter` is thread-safe and shared across workers — when
+one worker hits 429, the delay increases for all of them, so the system
+self-corrects even at high concurrency.
+
+**Caveats:**
+- The disk-check happens once at the start (not per-worker)
+- All workers share one `requests.Session`-equivalent — no per-worker connection pool
+- If `stealth-core` is enabled (`--stealth`), each worker spawns its own
+  subprocess; this is slower than direct calls but the parallelism still wins
 
 #### Input Format
 

@@ -65,6 +65,7 @@ def batch_process(args: argparse.Namespace) -> None:
     adaptive = not args.no_adaptive  # flag is --no-adaptive, default True
     correlation_mode = args.correlation_mode
     correlation_min_confidence = args.correlation_min_confidence
+    workers = args.workers
 
     stats = process_batch(
         input_file,
@@ -77,6 +78,7 @@ def batch_process(args: argparse.Namespace) -> None:
         adaptive=adaptive,
         correlation_mode=correlation_mode,
         correlation_min_confidence=correlation_min_confidence,
+        workers=workers,
     )
     sys.exit(0 if stats else 1)
 
@@ -95,6 +97,9 @@ Examples:
 
   # Resume from checkpoint
   python -m company_quickcheck batch input.xlsx output.xlsx --resume
+
+  # Parallel batch (4 concurrent workers, shared adaptive rate limiter)
+  python -m company_quickcheck batch input.xlsx output.xlsx --workers 4
 
   # Use stealth-core for requests
   USE_STEALTH_CORE=1 python -m company_quickcheck batch input.xlsx output.xlsx
@@ -128,6 +133,12 @@ Examples:
     batch_parser.add_argument("--correlation-min-confidence", type=float,
                               default=0.70,
                               help="Minimum correlation confidence threshold (default: 0.70)")
+    batch_parser.add_argument("--workers", type=int, default=1,
+                              help="Number of concurrent worker threads for API calls "
+                                   "(default: 1 = sequential). 2+ enables parallel mode "
+                                   "with shared AdaptiveRateLimiter for backoff. "
+                                   "Higher values trade more API calls per second for "
+                                   "higher 429 risk; the adaptive limiter self-corrects.")
     batch_parser.set_defaults(func=batch_process)
 
     # Parse arguments

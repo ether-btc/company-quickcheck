@@ -125,6 +125,84 @@ class TestAdaptiveRateLimiter(unittest.TestCase):
         self.assertIn("delay=", r)
 
 
+class TestAdaptiveRateLimiterThreadSafety(unittest.TestCase):
+    """Concurrent workers must not corrupt the limiter's internal state."""
+
+    def test_concurrent_record_response_keeps_delay_in_bounds(self):
+        """Hammering record_response from N threads keeps _current_delay
+        within [min_delay, max_delay] — no torn reads/writes."""
+        import threading
+
+        limiter = AdaptiveRateLimiter(
+            initial_delay=1.0,
+            min_delay=0.2,
+            max_delay=8.0,
+            backoff_multiplier=2.0,
+            success_divisor=2.0,
+        )
+        iterations = 500
+        threads_n = 8
+
+        def worker(responses):
+            for code in responses:
+                limiter.record_response(code)
+
+        # Mix of 200, 429, 500 responses
+        responses = [200] * 50 + [429] * 5 + [500] * 3
+        threads = [
+            threading.Thread(target=worker, args=(responses,))
+            for _ in range(threads_n)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Final state must still be in bounds — no NaN, no out-of-range
+        self.assertGreaterEqual(limiter.current_delay, limiter.min_delay)
+        self.assertLessEqual(limiter.current_delay, limiter.max_delay)
+        # _consecutive_errors is an int (no torn 32-bit write)
+        self.assertIsInstance(limiter._consecutive_errors, int)
+
+    def test_concurrent_wait_does_not_serialize_workers(self):
+        """Workers calling wait() should not block each other on the lock.
+
+        With many workers and a small delay, total wall time should be
+        close to a single delay (parallelism), not N * delay (serialised).
+        """
+        import threading
+        import time as time_mod
+
+        limiter = AdaptiveRateLimiter(
+            initial_delay=0.1,
+            min_delay=0.1,
+            max_delay=1.0,
+        )
+        # Pre-arm: make sure current_delay is 0.1
+        limiter._current_delay = 0.1
+
+        start = time_mod.monotonic()
+        threads_n = 5
+
+        def worker():
+            limiter.wait()
+
+        threads = [threading.Thread(target=worker) for _ in range(threads_n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        elapsed = time_mod.monotonic() - start
+
+        # If wait() were serialising workers on the lock, elapsed would be
+        # ~threads_n * 0.1s = 0.5s. With proper lock-released-before-sleep,
+        # workers sleep in parallel and elapsed should be ~0.1s (within slack).
+        self.assertLess(
+            elapsed, 0.3,
+            f"workers appear to be serialised on the lock (elapsed={elapsed:.3f}s)",
+        )
+
+
 class TestAdaptiveRateLimiterIntegration(unittest.TestCase):
     """Test the wait() + record_response cycle."""
 
