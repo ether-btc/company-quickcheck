@@ -3,6 +3,7 @@
 
 import os
 import json
+import random
 import requests
 import unittest
 from unittest.mock import patch, Mock, call
@@ -167,8 +168,14 @@ class TestSearchOpendata(unittest.TestCase):
         result = search_opendata("Test AG", max_retries=3)
         self.assertIsNone(result)
         self.assertEqual(mock_get.call_count, 3)
-        # Exponential backoff: 2^0=1s, 2^1=2s
-        mock_sleep.assert_has_calls([call(1), call(2)])
+        # Exponential backoff with jitter: wait_secs = 2**attempt, jitter = 0.5-1.5x
+        # attempt 0: wait_secs=1, range 0.5-1.5
+        # attempt 1: wait_secs=2, range 1.0-3.0
+        self.assertEqual(mock_sleep.call_count, 2)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        second_call = mock_sleep.call_args_list[1][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
+        self.assertTrue(1.0 <= second_call <= 3.0, f"Second sleep {second_call} not in range [1.0, 3.0]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
@@ -184,7 +191,10 @@ class TestSearchOpendata(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["size"], 1)
         self.assertEqual(mock_get.call_count, 2)
-        mock_sleep.assert_called_once_with(1)
+        # First sleep ~1s with jitter (0.5-1.5)
+        self.assertEqual(mock_sleep.call_count, 1)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
@@ -194,19 +204,28 @@ class TestSearchOpendata(unittest.TestCase):
         result = search_opendata("Test AG", max_retries=3)
         self.assertIsNone(result)
         self.assertEqual(mock_get.call_count, 3)
+        # Two sleeps with jitter: ~1s (0.5-1.5), ~2s (1.0-3.0)
+        self.assertEqual(mock_sleep.call_count, 2)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        second_call = mock_sleep.call_args_list[1][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
+        self.assertTrue(1.0 <= second_call <= 3.0, f"Second sleep {second_call} not in range [1.0, 3.0]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
     def test_502_retries_exhausted(self, mock_get, mock_sleep):
-        """HTTP 502 should retry and return None after max_retries."""
-        responses = [Mock(status_code=502) for _ in range(3)]
-        for r in responses:
-            r.headers = {}
+        """502 should retry and return None after max_retries."""
+        responses = [Mock(status_code=502, headers={}) for _ in range(3)]
         mock_get.side_effect = responses
         result = search_opendata("Test AG", max_retries=3)
         self.assertIsNone(result)
         self.assertEqual(mock_get.call_count, 3)
-        mock_sleep.assert_any_call(1)  # 2^0
+        # Two sleeps with jitter: ~1s (0.5-1.5), ~2s (1.0-3.0)
+        self.assertEqual(mock_sleep.call_count, 2)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        second_call = mock_sleep.call_args_list[1][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
+        self.assertTrue(1.0 <= second_call <= 3.0, f"Second sleep {second_call} not in range [1.0, 3.0]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
@@ -222,6 +241,12 @@ class TestSearchOpendata(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["size"], 1)
         self.assertEqual(mock_get.call_count, 3)
+        # Two sleeps with jitter: ~1s (0.5-1.5), ~2s (1.0-3.0)
+        self.assertEqual(mock_sleep.call_count, 2)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        second_call = mock_sleep.call_args_list[1][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
+        self.assertTrue(1.0 <= second_call <= 3.0, f"Second sleep {second_call} not in range [1.0, 3.0]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
@@ -232,6 +257,12 @@ class TestSearchOpendata(unittest.TestCase):
         result = search_opendata("Test AG", max_retries=3)
         self.assertIsNone(result)
         self.assertEqual(mock_get.call_count, 3)
+        # Two sleeps with jitter: ~1s (0.5-1.5), ~2s (1.0-3.0)
+        self.assertEqual(mock_sleep.call_count, 2)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        second_call = mock_sleep.call_args_list[1][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
+        self.assertTrue(1.0 <= second_call <= 3.0, f"Second sleep {second_call} not in range [1.0, 3.0]")
 
     @patch("company_quickcheck.api.time.sleep")
     @patch("requests.get")
@@ -254,6 +285,10 @@ class TestSearchOpendata(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["size"], 1)
         self.assertEqual(mock_get.call_count, 2)
+        # One sleep with jitter: ~1s (0.5-1.5)
+        self.assertEqual(mock_sleep.call_count, 1)
+        first_call = mock_sleep.call_args_list[0][0][0]
+        self.assertTrue(0.5 <= first_call <= 1.5, f"First sleep {first_call} not in range [0.5, 1.5]")
 
     @patch("requests.get")
     def test_non_retryable_http_error_no_retry(self, mock_get):
