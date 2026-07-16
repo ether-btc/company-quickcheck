@@ -5,7 +5,7 @@ Collects -1 firms for VIES/web retry phases.
 Designed for overnight autonomous run.
 """
 
-import json, logging, os, sys, time, signal
+import json, logging, os, sys, time, signal, random
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ def run_phase1():
                 retry_queue.append({"idx": idx, "fb": firmenbuchnr, "name": firmenname, "uid": uid})
                 # NO WAITING — continue immediately
                 # Small sleep to avoid hammering
-                time.sleep(0.3)
+                time.sleep(random.uniform(0.2, 0.5))
 
             elif resp.status_code == 200:
                 data = resp.json()
@@ -229,7 +229,7 @@ def run_phase1():
             df.at[idx, "GELÖSCHT"] = -1
             stats["errors"] += 1
             retry_queue.append({"idx": idx, "fb": firmenbuchnr, "name": firmenname, "uid": uid})
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.4, 0.7))
 
         # Checkpoint
         if (row_idx + 1) % CHECKPOINT_EVERY == 0:
@@ -240,7 +240,7 @@ def run_phase1():
 
         # Small delay between requests (avoid 429 burst)
         last_processed_idx = row_idx
-        time.sleep(1.0)
+        time.sleep(random.uniform(0.8, 1.3))
 
     # Final checkpoint
     save_checkpoint(last_processed_idx, stats)
@@ -295,7 +295,7 @@ def run_phase2(retry_queue: list):
             # Keep -1 for web scrape phase
             logger.info("[VIES->-1] " + fb + " err=" + str(vies["error"]))
 
-        time.sleep(1.5)  # VIES rate limit
+        time.sleep(random.uniform(1.2, 1.8))  # VIES rate limit
 
     df.to_excel(OUTPUT_FILE, index=False)
     logger.info("VIES updated: " + str(updated) + " firms")
@@ -367,7 +367,7 @@ def run_phase3():
         except Exception as e:
             logger.info("[WEB ERR] " + fb + ": " + str(e))
 
-        time.sleep(2.0)  # Be polite to web servers
+        time.sleep(random.uniform(1.5, 2.5))  # Be polite to web servers
 
     df.to_excel(OUTPUT_FILE, index=False)
 

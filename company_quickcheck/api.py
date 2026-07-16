@@ -3,6 +3,7 @@
 
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -155,7 +156,7 @@ def search_opendata(name: str, limit: int = 5,
                     f"retrying in {wait_secs}s"
                 )
                 if attempt < max_retries - 1:
-                    time.sleep(wait_secs)
+                    time.sleep(random.uniform(wait_secs * 0.5, wait_secs * 1.5))
                     continue
                 else:
                     logger.error(f"HTTP {resp.status_code} persisted after {max_retries} attempts")
@@ -175,7 +176,7 @@ def search_opendata(name: str, limit: int = 5,
                 (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
             )
             if attempt < max_retries - 1:
-                time.sleep(wait_secs)
+                time.sleep(random.uniform(wait_secs * 0.5, wait_secs * 1.5))
                 continue
             return None
         except requests.exceptions.ConnectionError as e:
@@ -185,7 +186,7 @@ def search_opendata(name: str, limit: int = 5,
                 (f" — retrying in {wait_secs}s" if attempt < max_retries - 1 else " — no retries left")
             )
             if attempt < max_retries - 1:
-                time.sleep(wait_secs)
+                time.sleep(random.uniform(wait_secs * 0.5, wait_secs * 1.5))
                 continue
             return None
         except requests.exceptions.HTTPError as e:

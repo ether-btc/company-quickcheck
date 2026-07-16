@@ -20,6 +20,7 @@ Environment: OPENDATA_API_KEY must be set or exported.
 import os
 import re
 import sys
+import random
 import time
 import json
 import argparse
@@ -186,7 +187,7 @@ def process(input_file: str, output_file: str, limit: int = None,
             print(f"  [{idx}] {firmenname}: keine Daten gefunden (-1)")
             stats["not_found"] += 1
 
-        time.sleep(1.1)
+        time.sleep(random.uniform(0.9, 1.3))
 
         # Checkpoint every N rows — persist immediately on error too
         if (idx + 1) % checkpoint_every == 0:

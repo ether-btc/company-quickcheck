@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import random
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -418,4 +419,5 @@ def _maybe_sleep(rate_limiter) -> None:
     this is a no-op. With a fixed delay we sleep here.
     """
     if rate_limiter is None:
-        time.sleep(config.get_rate_limit_delay())
+        base = config.get_rate_limit_delay()
+        time.sleep(random.uniform(base * 0.8, base * 1.2))
