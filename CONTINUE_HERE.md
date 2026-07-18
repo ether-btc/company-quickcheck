@@ -1,5 +1,12 @@
 # Company QuickCheck - Session Continuation
 
+## **NEW: Session 2026-07-18 — Day-1 Recheck (1,711 canonical recovered)** → see `SESSION-2026-07-18.md`
+
+Canonical 1,711-row source recovered from `/srv/sync/completed/companies_checked_test10.7z`.
+50 rows processed (9 classified), 1,661 rows pending resumable recheck.
+Wiki: `~/wiki/audits/company-quickcheck-day1-recheck-2026-07-18.md`.
+Pipeline lives in `/srv/sync/company-recheck-2026-07/`. **No code in this repo was modified.**
+
 ## Last Session: 2026-05-13
 
 ### Commit: 535387f (master pushed to origin)
