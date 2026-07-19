@@ -243,5 +243,163 @@ class TestMergeToFinal(unittest.TestCase):
             autonomous_batch.FINAL_OUTPUT = original_final
 
 
+class TestPhase1RateLimitBackoff(unittest.TestCase):
+    """Tests for the 429 backoff / circuit-breaker introduced in cycle-1
+    (commit e6976a1). These tests prevent regressions of the backoff logic
+    and document its expected behavior contract."""
+
+    def setUp(self):
+        import autonomous_batch
+        self._mod = autonomous_batch
+        self._original_input = autonomous_batch.INPUT_FILE
+        self._original_output = autonomous_batch.OUTPUT_FILE
+        self._original_merged = autonomous_batch.MERGED_FILE
+        self._original_ckpt = autonomous_batch.CHECKPOINT_FILE
+        self._temp_dir = tempfile.mkdtemp()
+        input_path = Path(self._temp_dir) / "input.xlsx"
+        output_path = Path(self._temp_dir) / "output.xlsx"
+        merged_path = Path(self._temp_dir) / "merged.xlsx"
+        ckpt_path = Path(self._temp_dir) / "checkpoint.json"
+        autonomous_batch.INPUT_FILE = str(input_path)
+        autonomous_batch.OUTPUT_FILE = str(output_path)
+        autonomous_batch.MERGED_FILE = str(merged_path)
+        autonomous_batch.CHECKPOINT_FILE = str(ckpt_path)
+        # 5 firms, all with valid UIDs (use the real column name: UID_Nummer)
+        df = pd.DataFrame({
+            "Firmenname": [f"Firm{i}" for i in range(5)],
+            "Firmenbuchnr": [f"FN{i}" for i in range(5)],
+            "UID_Nummer": [f"ATU{i}" for i in range(5)],
+            "GELÖSCHT": [None] * 5,
+        })
+        df.to_excel(input_path, index=False)
+
+    def tearDown(self):
+        self._mod.INPUT_FILE = self._original_input
+        self._mod.OUTPUT_FILE = self._original_output
+        self._mod.MERGED_FILE = self._original_merged
+        self._mod.CHECKPOINT_FILE = self._original_ckpt
+
+    def _mock_response(self, code, headers=None, body=None):
+        m = MagicMock()
+        m.status_code = code
+        m.headers = headers or {}
+        if body is None and code == 200:
+            body = {"companies": [{"reg-status": "cancelled", "name": "Test"}]}
+        m.json.return_value = body or {}
+        return m
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_single_429_uses_short_backoff(self, mock_get, mock_sleep):
+        """Single 429 → exponential backoff ~2s (±20% jitter). NOT the old
+        0.2-0.5s. Note: each firm also triggers an unconditional trailing
+        sleep of 0.8-1.3s, so sleep[0] is the 429 backoff and sleep[-1] for
+        each firm is the trailing pacing sleep."""
+        mock_get.side_effect = [
+            self._mock_response(429),  # firm 0
+            self._mock_response(200),  # firm 1
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        # 5 firms × 1 trailing sleep = 5 trailing sleeps. Plus 1 429 backoff.
+        # First sleep is the 429 backoff (streak=1 → ~2s).
+        first_sleep = sleeps[0]
+        self.assertGreaterEqual(first_sleep, 1.6)  # 2.0 * 0.8
+        self.assertLessEqual(first_sleep, 2.4)      # 2.0 * 1.2
+        self.assertGreater(first_sleep, 1.0,
+                           "regression: single 429 backoff fell back to 0.2-0.5s")
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_three_consecutive_429s_triggers_circuit_breaker(self, mock_get, mock_sleep):
+        """3 consecutive 429s → 60s circuit-breaker pause. Sleep pattern:
+        [429-backoff-streak1, trailing, 429-backoff-streak2, trailing,
+         429-storm-60s, trailing, trailing, trailing] for 5 firms."""
+        mock_get.side_effect = [
+            self._mock_response(429),  # firm 0 → streak=1
+            self._mock_response(429),  # firm 1 → streak=2
+            self._mock_response(429),  # firm 2 → streak=3 → 60s breaker
+            self._mock_response(200),  # firm 3
+            self._mock_response(200),  # firm 4
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        # All 429 backoffs are at least > 1s. Find the breaker (≥ 48s).
+        long_sleeps = [s for s in sleeps if s >= 48.0]
+        self.assertEqual(len(long_sleeps), 1,
+                         f"expected exactly one 60s circuit breaker, got sleeps={sleeps}")
+        # And 3 backoffs total, each > 1s (proves we escalated, didn't return to 0.2-0.5s)
+        backoffs = [s for s in sleeps if s > 1.5]
+        self.assertGreaterEqual(len(backoffs), 3,
+                                f"expected at least 3 429 backoffs, got {backoffs}")
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_streak_resets_on_200(self, mock_get, mock_sleep):
+        """After a 200, the consecutive_429 counter resets — a later 429
+        should get the streak=1 backoff (~2s), not the streak=4 backoff (~16s)."""
+        mock_get.side_effect = [
+            self._mock_response(429),  # firm 0 → streak=1 → ~2s backoff
+            self._mock_response(200),  # firm 1: success → streak resets
+            self._mock_response(429),  # firm 2: 429 → streak=1 again → ~2s
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        # Both 429 backoffs should be in the streak=1 range (~1.6-2.4s)
+        backoffs = [s for s in sleeps if s > 1.5]
+        self.assertEqual(len(backoffs), 2,
+                         f"expected 2 429 backoffs (one for each 429), got {backoffs}")
+        for b in backoffs:
+            self.assertGreaterEqual(b, 1.6,
+                f"regression: 429 backoff {b}s not in streak=1 range (1.6-2.4)")
+            self.assertLessEqual(b, 2.4,
+                f"regression: 429 backoff {b}s escalated past streak=1 range")
+        # Critical: neither backoff should be in the streak=4 range (12.8-19.2s)
+        for b in backoffs:
+            self.assertLess(b, 5.0,
+                "regression: streak did not reset on 200 — 2nd 429 got "
+                "escalated backoff instead of streak=1 backoff")
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_retry_after_header_respected(self, mock_get, mock_sleep):
+        """If server sends Retry-After: 30, we honor it (±20% jitter),
+        overriding our exponential backoff."""
+        mock_get.side_effect = [
+            self._mock_response(429, headers={"Retry-After": "30"}),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        first_sleep = sleeps[0]
+        self.assertGreaterEqual(first_sleep, 24.0)  # 30 * 0.8
+        self.assertLessEqual(first_sleep, 36.0)     # 30 * 1.2
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_429_queues_to_retry_queue(self, mock_get, mock_sleep):
+        """429 firms are queued (GELÖSCHT=-1) for phase 2/3, not marked processed."""
+        mock_get.side_effect = [
+            self._mock_response(429),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        result = pd.read_excel(self._mod.OUTPUT_FILE)
+        firm0 = result[result["Firmenbuchnr"] == "FN0"].iloc[0]
+        self.assertEqual(firm0["GELÖSCHT"], -1,
+                         "429 firm should be marked -1 (queued for retry)")
+
+
 if __name__ == "__main__":
     unittest.main()
