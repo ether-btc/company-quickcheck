@@ -197,10 +197,11 @@ def run_phase1():
                 retry_queue.append({"idx": idx, "fb": firmenbuchnr, "name": firmenname, "uid": uid})
 
                 # Respect server backoff: respect Retry-After if present
+                # (RFC 7231: <delay-seconds> or HTTP-date; we only handle seconds)
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after:
                     try:
-                        wait = float(retry_after)
+                        wait = max(0.0, float(retry_after))
                     except ValueError:
                         wait = 5.0
                 else:
