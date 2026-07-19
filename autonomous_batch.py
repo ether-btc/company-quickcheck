@@ -153,6 +153,7 @@ def run_phase1():
 
     retry_queue = []
     last_processed_idx = start_idx - 1
+    consecutive_429s = 0  # For exponential backoff / circuit breaker (see 429 branch)
 
     for idx, row in df.iterrows():
         row_idx = df.index.get_loc(idx)
@@ -186,18 +187,40 @@ def run_phase1():
             )
 
             if resp.status_code == 429:
-                # 429 → skip immediately, add to retry queue
-                logger.info(f"[429] {firmenname} → queuing for retry")
+                # 429 → queue for retry, then back off.
+                # No circuit breaker here would mean the entire batch eats 429s
+                # at 0.2-0.5s spacing — wastes API quota and risks key suspension.
+                consecutive_429s += 1
+                logger.info(f"[429] {firmenname} → queuing for retry (streak={consecutive_429s})")
                 df.at[idx, "GELÖSCHT"] = -1
                 stats["skipped_429"] += 1
                 retry_queue.append({"idx": idx, "fb": firmenbuchnr, "name": firmenname, "uid": uid})
-                # NO WAITING — continue immediately
-                # Small sleep to avoid hammering
-                time.sleep(random.uniform(0.2, 0.5))
+
+                # Respect server backoff: respect Retry-After if present
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = 5.0
+                else:
+                    # Exponential: 2s, 4s, 8s... capped at 60s. After 3 consecutive
+                    # 429s, long pause (circuit-breaker) to let the rate window reset.
+                    if consecutive_429s >= 3:
+                        wait = 60.0
+                        logger.warning(
+                            f"[429-STORM] {consecutive_429s} consecutive 429s — "
+                            f"pausing {wait:.0f}s (circuit breaker)"
+                        )
+                    else:
+                        wait = min(2.0 ** consecutive_429s, 60.0)
+                time.sleep(random.uniform(wait * 0.8, wait * 1.2))
 
             elif resp.status_code == 200:
                 data = resp.json()
                 companies = data.get("companies", [])
+                # Reset 429 streak on any successful response
+                consecutive_429s = 0
                 if companies:
                     # Check first result
                     company = companies[0]
