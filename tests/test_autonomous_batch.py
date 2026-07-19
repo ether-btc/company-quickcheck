@@ -400,6 +400,96 @@ class TestPhase1RateLimitBackoff(unittest.TestCase):
         self.assertEqual(firm0["GELÖSCHT"], -1,
                          "429 firm should be marked -1 (queued for retry)")
 
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_retry_after_http_date_format(self, mock_get, mock_sleep):
+        """RFC 7231 §7.1.3: Retry-After can be HTTP-date. Verify we parse it
+        and compute the seconds-until delta correctly. (Cycle-3 review from
+        DeepSeek V4 Pro + MiniMax-M3 + v4-flash identified this gap.)"""
+        from datetime import datetime, timedelta, timezone
+        # Set Retry-After to 30 seconds from now (HTTP-date format)
+        future = datetime.now(timezone.utc) + timedelta(seconds=30)
+        http_date = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        mock_get.side_effect = [
+            self._mock_response(429, headers={"Retry-After": http_date}),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        first_sleep = sleeps[0]
+        # Should be ~30s (±20% jitter = 24-36), NOT the 5s fallback
+        self.assertGreaterEqual(first_sleep, 24.0,
+            f"HTTP-date parsing failed: sleep={first_sleep}, expected ~30s")
+        self.assertLessEqual(first_sleep, 36.0,
+            f"HTTP-date parsing failed: sleep={first_sleep}, expected ~30s")
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_retry_after_huge_value_capped_at_3600(self, mock_get, mock_sleep):
+        """Defensive cap: Retry-After=99999 should be capped at 3600s. Cycle-3
+        review from DeepSeek v4-pro + v4-flash flagged missing upper bound."""
+        mock_get.side_effect = [
+            self._mock_response(429, headers={"Retry-After": "99999"}),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        first_sleep = sleeps[0]
+        # Capped at 3600 * 1.2 = 4320
+        self.assertLessEqual(first_sleep, 4320.0,
+            f"Retry-After cap failed: sleep={first_sleep} should be <= 4320 (3600*1.2)")
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_retry_after_malformed_falls_through_to_exponential(self, mock_get, mock_sleep):
+        """If Retry-After is neither a number nor a valid HTTP-date, fall
+        through to the exponential backoff (NOT a static 5s fallback).
+        Cycle-3 review from MiniMax-M3 identified this regression risk."""
+        mock_get.side_effect = [
+            self._mock_response(429, headers={"Retry-After": "garbage-not-a-date"}),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        self._mod.run_phase1()
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        first_sleep = sleeps[0]
+        # Streak=1 → exponential wait = 2s, ±20% jitter (1.6-2.4s)
+        self.assertGreaterEqual(first_sleep, 1.6,
+            f"malformed Retry-After should fall through to exponential (streak=1 → ~2s), got {first_sleep}")
+        self.assertLessEqual(first_sleep, 2.4)
+
+    @patch("autonomous_batch.time.sleep")
+    @patch("requests.get")
+    def test_retry_after_negative_pinned_to_zero(self, mock_get, mock_sleep):
+        """Negative Retry-After must not crash (regression guard for 913b809).
+        Pinned to 0 → uniform(0, 0) = 0, so the sleep is essentially 0."""
+        mock_get.side_effect = [
+            self._mock_response(429, headers={"Retry-After": "-5"}),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+            self._mock_response(200),
+        ]
+        # Should NOT raise — that was the bug 913b809 fixed
+        try:
+            self._mod.run_phase1()
+        except ValueError as e:
+            self.fail(f"negative Retry-After crashed: {e}")
+        sleeps = [c.args[0] for c in mock_sleep.call_args_list]
+        first_sleep = sleeps[0]
+        # Pinned to 0 → sleep(0)
+        self.assertGreaterEqual(first_sleep, 0.0)
+        self.assertLessEqual(first_sleep, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

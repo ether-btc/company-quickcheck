@@ -196,17 +196,38 @@ def run_phase1():
                 stats["skipped_429"] += 1
                 retry_queue.append({"idx": idx, "fb": firmenbuchnr, "name": firmenname, "uid": uid})
 
-                # Respect server backoff: respect Retry-After if present
-                # (RFC 7231: <delay-seconds> or HTTP-date; we only handle seconds)
-                retry_after = resp.headers.get("Retry-After")
+                # Respect server backoff: Retry-After per RFC 7231 §7.1.3
+                # accepts either <delta-seconds> (int or float string) or
+                # <HTTP-date>. Parse both; cap at 3600s to defend against
+                # misconfigured proxies sending huge values.
+                from email.utils import parsedate_to_datetime
+                from datetime import datetime, timezone
+
+                retry_after = resp.headers.get("Retry-After", "").strip()
+                parsed_wait = None
                 if retry_after:
+                    # Try delta-seconds first (handles int and float strings)
                     try:
-                        wait = max(0.0, float(retry_after))
+                        parsed_wait = max(0.0, min(3600.0, float(retry_after)))
                     except ValueError:
-                        wait = 5.0
+                        # Try HTTP-date format (RFC 1123 / IMF-fixdate)
+                        try:
+                            target = parsedate_to_datetime(retry_after)
+                            if target is not None:
+                                now = datetime.now(timezone.utc)
+                                # parsedate_to_datetime returns naive UTC —
+                                # re-attach tzinfo so subtraction works
+                                if target.tzinfo is None:
+                                    target = target.replace(tzinfo=timezone.utc)
+                                delta = (target - now).total_seconds()
+                                parsed_wait = max(0.0, min(3600.0, delta))
+                        except (TypeError, ValueError):
+                            parsed_wait = None
+                if parsed_wait is not None:
+                    wait = parsed_wait
                 else:
-                    # Exponential: 2s, 4s, 8s... capped at 60s. After 3 consecutive
-                    # 429s, long pause (circuit-breaker) to let the rate window reset.
+                    # Exponential: 2s, 4s, 8s... After 3 consecutive 429s,
+                    # 60s pause (circuit-breaker) to let the rate window reset.
                     if consecutive_429s >= 3:
                         wait = 60.0
                         logger.warning(
