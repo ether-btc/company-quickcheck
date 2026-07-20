@@ -6,6 +6,7 @@ import logging
 import sys
 from .core import process_batch
 from .api import search_company, is_deleted, format_company
+from . import ajs_exclusions
 from . import __version__
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,28 @@ Examples:
                                    "higher 429 risk; the adaptive limiter self-corrects.")
     batch_parser.set_defaults(func=batch_process)
 
+    # apply-ajs-exclusions command — bridge austria-job-scout's pre-flight
+    # dropped-rows CSV into scout CSVs as registry_status=EXCLUDE markers.
+    ajs_parser = subparsers.add_parser(
+        "apply-ajs-exclusions",
+        help="Read a dropped-rows CSV from `austria-job-scout discover-kmu --out-dropped` "
+             "and mark the corresponding scout rows as EXCLUDE. Provides the upstream "
+             "data-quality feedback loop so future scout runs skip NXDOMAIN / sentinel rows.",
+    )
+    ajs_parser.add_argument(
+        "--dropped-csv", required=True,
+        help="path to the dropped-rows CSV (from `discover-kmu --out-dropped`)",
+    )
+    ajs_parser.add_argument(
+        "--scout-dir", required=True,
+        help="directory containing scout_*.csv files (e.g. /srv/sync/company-recheck-2026-07/scout/)",
+    )
+    ajs_parser.add_argument(
+        "--in-place", action="store_true",
+        help="overwrite scout_*.csv files (default: write *.excluded.csv alongside for diff/review)",
+    )
+    ajs_parser.set_defaults(func=apply_ajs_exclusions)
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -150,6 +173,66 @@ Examples:
 
     # Call the appropriate function
     args.func(args)
+
+
+def apply_ajs_exclusions(args: argparse.Namespace) -> None:
+    """Apply austria-job-scout pre-flight exclusions to scout CSVs.
+
+    Reads the dropped-rows CSV, groups by source_sheet, and applies
+    EXCLUDE markers to the corresponding scout CSVs. Default behaviour
+    is non-destructive: writes ``<file>.excluded.csv`` alongside each
+    touched scout file so the caller can diff before swapping with
+    ``--in-place``.
+    """
+    from pathlib import Path
+
+    _ensure_logging()
+    try:
+        dropped = ajs_exclusions.load_dropped_csv(args.dropped_csv)
+    except FileNotFoundError as e:
+        logger.error("%s", e)
+        sys.exit(2)
+    except ValueError as e:
+        logger.error("%s", e)
+        sys.exit(2)
+
+    if not dropped:
+        logger.info("dropped CSV is empty — nothing to apply")
+        return
+
+    scout_dir = Path(args.scout_dir)
+    if not scout_dir.is_dir():
+        logger.error("scout-dir does not exist or is not a directory: %s", scout_dir)
+        sys.exit(2)
+
+    by_sheet = ajs_exclusions.group_by_sheet(dropped)
+    total_updated = total_skipped = total_missing = 0
+
+    for sheet_name, exclusions in by_sheet.items():
+        scout_csv = scout_dir / sheet_name
+        if not scout_csv.exists():
+            logger.warning("scout file missing, skipping: %s", scout_csv)
+            total_missing += len(exclusions)
+            continue
+        try:
+            updated, skipped, missing = ajs_exclusions.apply_to_scout_csv(
+                scout_csv, exclusions, in_place=args.in_place,
+            )
+        except (FileNotFoundError, ValueError) as e:
+            logger.error("%s: %s", scout_csv, e)
+            sys.exit(2)
+        total_updated += updated
+        total_skipped += skipped
+        total_missing += missing
+        logger.info(
+            "  %s: %d updated, %d skipped (already decided), %d missing",
+            sheet_name, updated, skipped, missing,
+        )
+
+    logger.info(
+        "ajs_exclusions: total — %d updated, %d skipped, %d missing (in-place=%s)",
+        total_updated, total_skipped, total_missing, args.in_place,
+    )
 
 
 if __name__ == "__main__":
