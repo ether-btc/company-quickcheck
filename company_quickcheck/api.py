@@ -25,6 +25,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Module-level runtime cache for one-shot probes (e.g. capability detection).
+_runtime_cache: dict = {}
+
 # Use config for base URL and API key
 BASE_URL = config.get_base_url()
 API_KEY = config.get_api_key()
@@ -230,10 +233,14 @@ def search_opendata(name: str, limit: int = 5,
 def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     """Search using stealth-core as subprocess.
 
-    Credentials are passed via --custom-headers JSON on the command line.
-    (stealth-core has no --headers-file option.)
+    Credentials are passed via --custom-headers-file (a temp file with
+    mode 0600) so the Authorization header never appears in ps/cmdline.
+    Requires stealth-core >= 56277f6 (2026-07-19).
+    Falls back to --custom-headers (cmdline) if --custom-headers-file is
+    unavailable, with a warning.
     """
     import json
+    import tempfile
 
     # Check if stealth-core is available in PATH
     if not shutil.which("stealth-core"):
@@ -255,15 +262,59 @@ def search_stealth_core(name: str, limit: int = 5) -> Optional[Dict]:
     auth_header = f"Basic {base64.b64encode(f'{api_key}:'.encode()).decode()}"
     headers_json = json.dumps({"Authorization": auth_header})
 
-    # Use --headers (JSON string) to pass auth — stealth-core has no --headers-file
-    cmd = [
-        "stealth-core",
-        "-c", stealth_config,
-        "fetch",
-        full_url,
-        "--custom-headers", headers_json,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # Detect whether stealth-core supports --custom-headers-file (>= 56277f6).
+    # We do this lazily on first call and cache the result module-level.
+    if "_supports_headers_file" not in _runtime_cache:
+        try:
+            probe = subprocess.run(
+                ["stealth-core", "fetch", "--help"],
+                capture_output=True, text=True, timeout=5,
+            )
+            _runtime_cache["_supports_headers_file"] = (
+                "--custom-headers-file" in (probe.stdout + probe.stderr)
+            )
+        except Exception:
+            _runtime_cache["_supports_headers_file"] = False
+        if not _runtime_cache["_supports_headers_file"]:
+            logger.warning(
+                "stealth-core does not support --custom-headers-file; "
+                "falling back to --custom-headers (API key visible in cmdline). "
+                "Upgrade stealth-core to >= 56277f6 to fix."
+            )
+
+    if _runtime_cache["_supports_headers_file"]:
+        # Secure path: write headers to a temp file (0600), pass the path.
+        # The file is deleted in the finally block below.
+        fd, headers_file_path = tempfile.mkstemp(
+            prefix="sc-headers-", suffix=".json"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(headers_json)
+            os.chmod(headers_file_path, 0o600)
+            cmd = [
+                "stealth-core",
+                "-c", stealth_config,
+                "fetch",
+                full_url,
+                "--custom-headers-file", headers_file_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        finally:
+            try:
+                os.unlink(headers_file_path)
+            except OSError:
+                pass
+    else:
+        # Legacy fallback: pass via cmdline (visible in ps). Logged above.
+        cmd = [
+            "stealth-core",
+            "-c", stealth_config,
+            "fetch",
+            full_url,
+            "--custom-headers", headers_json,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
     if result.returncode != 0:
         logger.error(f"Stealth-core error: {result.stderr}")
