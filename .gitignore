@@ -24,3 +24,7 @@ htmlcov/
 .vscode/
 .idea/
 
+
+# Editor / chat tool cruft
+.aider*
+*.chat.history.md
