@@ -5,14 +5,15 @@ into company-quickcheck's scout CSV status.
 austria-job-scout's ``discover-kmu --dns-pre-flight`` produces a
 ``dropped.csv`` listing rows that *cannot* possibly produce a valid
 KMU job page (sentinel input like ``https://nan``, NXDOMAIN apex,
-missing name). This module reads that CSV and rewrites the matching
-rows in the corresponding ``scout_*.csv`` files to set
-``registry_status="EXCLUDE"`` and ``registry_reason`` to a stable
+transient DNS timeout, missing name). This module reads that CSV and
+rewrites the matching rows in the corresponding ``scout_*.csv`` files to
+set ``registry_status="EXCLUDE"`` and ``registry_reason`` to a stable
 marker that downstream consumers can recognise.
 
 Marker conventions (stable contract):
     registry_status = "EXCLUDE"
     registry_reason = "ajs_preflight:<reason>"   e.g. "ajs_preflight:dns_nxdomain"
+                                                      "ajs_preflight:dns_timeout"
                                                       "ajs_preflight:sentinel"
                                                       "ajs_preflight:missing_name"
 
@@ -20,6 +21,18 @@ A row already excluded by other means (``registry_status in {"EXCLUDE",
 "REGISTRY_OPEN", "REGISTRY_OPEN_WITH_WEBSITE", "REGISTRY_DELETED"}``)
 is left untouched — the dropped CSV is an additive signal, not a
 destructive override.
+
+The stable bare-reason set is the source of truth for downstream
+consumers. It matches austria-job-scout v0.4.0's
+``kmu_wien_discovery.KNOWN_DROP_REASONS`` (frozenset of 4 codes):
+    - dns_nxdomain   (permanent NXDOMAIN → EXCLUDE)
+    - dns_timeout    (transient resolver failure → retry-friendly)
+    - sentinel       (input value was a sentinel like https://nan)
+    - missing_name   (no company_name in source row)
+
+Anything else arrives as opaque ``ajs_preflight:dns_error:<repr>`` and
+should be triaged via ``austria-job-scout dropped-stats`` (exits rc=2
+to flag unknown reasons).
 """
 
 from __future__ import annotations
