@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install uv
+        run: pip install uv
+      
+      - name: Install dependencies
+        run: uv sync --all-extras
+      
+      - name: Run tests
+        run: uv run pytest -q
+
+  dropped-stats-gate:
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install uv
+        run: pip install uv
+      
+      - name: Install austria-job-scout (for dropped-stats)
+        run: |
+          git clone https://github.com/ether-btc/austria-job-scout.git
+          cd austria-job-scout
+          uv sync
+          echo "$(pwd)" >> $GITHUB_PATH
+      
+      - name: Run dropped-stats quality gate
+        run: |
+          cd austria-job-scout
+          # Check if dropped.csv artifact exists (from prior pipeline step)
+          if [ -f "$DROPPED_CSV_PATH" ]; then
+            uv run python -m austria_job_scout dropped-stats --dropped-csv "$DROPPED_CSV_PATH" --json
+          else
+            echo "No dropped.csv found at $DROPPED_CSV_PATH - skipping gate"
+            exit 0
+          fi
+        env:
+          DROPPED_CSV_PATH: ${{ github.workspace }}/dropped.csv

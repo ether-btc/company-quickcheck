@@ -5,9 +5,9 @@ into company-quickcheck's scout CSV status.
 austria-job-scout's ``discover-kmu --dns-pre-flight`` produces a
 ``dropped.csv`` listing rows that *cannot* possibly produce a valid
 KMU job page (sentinel input like ``https://nan``, NXDOMAIN apex,
-transient DNS timeout, missing name). This module reads that CSV and
-rewrites the matching rows in the corresponding ``scout_*.csv`` files to
-set ``registry_status="EXCLUDE"`` and ``registry_reason`` to a stable
+missing name). This module reads that CSV and rewrites the matching
+rows in the corresponding ``scout_*.csv`` files to set
+``registry_status=\"EXCLUDE\"`` and ``registry_reason`` to a stable
 marker that downstream consumers can recognise.
 
 Marker conventions (stable contract):
@@ -17,22 +17,23 @@ Marker conventions (stable contract):
                                                       "ajs_preflight:sentinel"
                                                       "ajs_preflight:missing_name"
 
-A row already excluded by other means (``registry_status in {"EXCLUDE",
-"REGISTRY_OPEN", "REGISTRY_OPEN_WITH_WEBSITE", "REGISTRY_DELETED"}``)
+A row already excluded by other means (``registry_status in {\"EXCLUDE\",
+\"REGISTRY_OPEN\", \"REGISTRY_OPEN_WITH_WEBSITE\", \"REGISTRY_DELETED\"}``)
 is left untouched — the dropped CSV is an additive signal, not a
 destructive override.
 
-The stable bare-reason set is the source of truth for downstream
-consumers. It matches austria-job-scout v0.4.0's
-``kmu_wien_discovery.KNOWN_DROP_REASONS`` (frozenset of 4 codes):
+The bare reason codes come from austria-job-scout's
+``kmu_wien_discovery.KNOWN_DROP_REASONS`` (frozen set, source of truth).
+As of v0.4.0 the stable set is:
     - dns_nxdomain   (permanent NXDOMAIN → EXCLUDE)
-    - dns_timeout    (transient resolver failure → retry-friendly)
+    - dns_timeout    (transient resolver failure → retry later)
     - sentinel       (input value was a sentinel like https://nan)
     - missing_name   (no company_name in source row)
 
-Anything else arrives as opaque ``ajs_preflight:dns_error:<repr>`` and
-should be triaged via ``austria-job-scout dropped-stats`` (exits rc=2
-to flag unknown reasons).
+Any other reason comes through as opaque ``dns_error:<repr>`` and
+should be triaged via the upstream
+``austria-job-scout dropped-stats`` subcommand (exits rc=2 to flag
+such rows).
 """
 
 from __future__ import annotations
@@ -126,8 +127,8 @@ def apply_to_scout_csv(
 ) -> tuple[int, int, int]:
     """Mark excluded rows in *scout_csv*.
 
-    Updates ``registry_status="EXCLUDE"`` and
-    ``registry_reason="ajs_preflight:<reason>"`` on every matching
+    Updates ``registry_status=\"EXCLUDE\"`` and
+    ``registry_reason=\"ajs_preflight:<reason>\"`` on every matching
     row whose ``row_id`` appears in *exclusions* and whose
     ``registry_status`` is not already a decided one.
 
@@ -200,7 +201,7 @@ def apply_to_scout_csv(
             wr.writerow(row)
             updated += 1
             logger.info(
-                "ajs_exclusions: %s row_id=%s → EXCLUDE (%s)",
+                "ajs_exclusions: %s row_id=%s -> EXCLUDE (%s)",
                 p.name, row_id, excl.reason,
             )
 
@@ -210,5 +211,6 @@ def apply_to_scout_csv(
     missing = len(by_row_id) - len(seen_row_ids)
 
     if not in_place:
-        logger.info("ajs_exclusions: wrote %s (use --in-place to swap)", out_path)
+        logger.info("ajs_exclusions: wrote excluded CSV to %s", out_path)
+
     return (updated, skipped, missing)
